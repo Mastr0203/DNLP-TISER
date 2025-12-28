@@ -1,3 +1,29 @@
+"""
+DEPRECATED: This file is deprecated and kept for backward compatibility only.
+
+This module has been refactored and moved to a CLI script with improved
+functionality and better organization. Please use the new script instead:
+
+    scripts/run_single_training.py
+
+The new script provides:
+- Command-line interface with argparse
+- Automatic device detection (CUDA, MPS, CPU)
+- Configurable training hyperparameters via CLI arguments
+- Better error handling and logging
+- Consistent style with other project scripts
+
+Example usage of the new script:
+    python scripts/run_single_training.py \\
+        --data src/data/processed/TISER_train_10pct.json \\
+        --output experiments/qwen_finetuned \\
+        --epochs 3 \\
+        --batch-size 1 \\
+        --learning-rate 2e-4
+
+This file may be removed in future versions.
+"""
+
 import os
 import torch
 from transformers import (
@@ -25,6 +51,14 @@ MODEL_ID = "Qwen/Qwen2.5-7B-Instruct"
 
 
 def main():
+    print("=" * 80)
+    print("WARNING: This script is DEPRECATED!")
+    print("=" * 80)
+    print("Please use the new CLI script instead:")
+    print("  python scripts/run_single_training.py --data <path> --output <path>")
+    print("=" * 80)
+    print()
+    
     print(f"--- Inizio Pipeline di Training su {MODEL_ID} ---")
 
     # --- 1. RILEVAMENTO DEVICE ---

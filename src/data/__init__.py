@@ -17,17 +17,23 @@ from src.data.preprocessing import (
 )
 
 from src.data.tiser_dataset import (
-    load_tiser_file,
-    TiserDataset
+    TiserExample,
+    TiserFileLoader,
+    TiserDataset,
+    load_tiser_file
 )
 
 __all__ = [
+    # Preprocessing utilities
     'ContextKeyExtractor',
     'HierarchicalSampler',
     'TISERPreprocessor',
     'preprocess_tiser_split',
-
+    
+    # Dataset loading and handling
+    'TiserExample',
+    'TiserFileLoader',
+    'TiserDataset',
     'load_tiser_file',
-    'TiserDataset'
 ]
 
