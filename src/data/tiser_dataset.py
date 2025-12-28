@@ -1,86 +1,79 @@
 # src/data/tiser_dataset.py
-
 from __future__ import annotations
-from torch.utils.data import Dataset
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Iterable
-import json
+from torch.utils.data import Dataset
 
 
 @dataclass
 class TiserExample:
+    """
+    Rappresenta un singolo esempio del dataset TISER.
+    """
     dataset_name: str
     question_id: str
     question: str
     answer: str
     prompt: str
-    output: Optional[str] = None  # usato solo per il train (SFT), di solito None per il test
+    output: Optional[str] = None  # None durante il test/inferenza
 
 
 def _normalize_item(raw: dict) -> TiserExample:
-    """
-    Converte un dict grezzo del JSON TISER (train o test) in un TiserExample.
-    Alcuni campi potrebbero mancare nel test (es. 'output').
-    """
-    dataset_name = raw.get("dataset_name", "")
-    qid = str(raw.get("question_id", ""))
-    question = raw.get("question", "")
-    answer = raw.get("answer", "")
-    prompt = raw.get("prompt", "")
-    output = raw.get("output")  # può essere None
-
+    """Converte un dizionario grezzo in un oggetto TiserExample."""
     return TiserExample(
-        dataset_name=dataset_name,
-        question_id=qid,
-        question=question,
-        answer=answer,
-        prompt=prompt,
-        output=output,
+        dataset_name=raw.get("dataset_name", ""),
+        question_id=str(raw.get("question_id", "")),
+        question=raw.get("question", ""),
+        answer=raw.get("answer", ""),
+        prompt=raw.get("prompt", ""),
+        output=raw.get("output"),
     )
 
 
 def load_tiser_file(
-    path: Path,
-    max_examples: Optional[int] = None,
-    dataset_filter: Optional[Iterable[str]] = None,
+        path: Path | str,
+        max_examples: Optional[int] = None,
+        dataset_filter: Optional[Iterable[str]] = None,
 ) -> List[TiserExample]:
     """
-    Carica un file JSON TISER (train/test/subset) e restituisce una lista di TiserExample.
-
-    - path: path al file .json
-    - max_examples: se specificato, tronca alla prima N righe
-    - dataset_filter: lista di dataset_name da tenere (es. ["tgqa_split_test"])
+    Legge un file JSONL (JSON Lines) TISER e restituisce una lista di esempi.
+    Gestisce correttamente la lettura riga per riga per evitare JSONDecodeError.
     """
     path = Path(path)
     if not path.exists():
-        raise FileNotFoundError(f"TISER file not found: {path}")
+        raise FileNotFoundError(f"File TISER non trovato: {path}")
 
+    data = []
+    # Lettura robusta per file JSONL (una struttura JSON per riga)
     with path.open("r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    if not isinstance(data, list):
-        raise ValueError(f"Expected a list of dicts in {path}, got {type(data)}")
+        for line in f:
+            line = line.strip()
+            if line:
+                try:
+                    data.append(json.loads(line))
+                except json.JSONDecodeError as e:
+                    print(f"Attenzione: saltata riga corrotta in {path}: {e}")
 
     examples: List[TiserExample] = []
     ds_filter_set = set(dataset_filter) if dataset_filter is not None else None
 
     for raw in data:
         ex = _normalize_item(raw)
+        # Filtro opzionale per dataset specifico
         if ds_filter_set is not None and ex.dataset_name not in ds_filter_set:
             continue
+
         examples.append(ex)
         if max_examples is not None and len(examples) >= max_examples:
             break
 
     return examples
 
-class TiserWrapperDataset(Dataset):
+
+class TiserDataset(Dataset):
     def __init__(self, examples: list[TiserExample], tokenizer):
-        """
-        examples: la lista di oggetti TiserExample rappresentanti il dataset.
-        tokenizer: il tokenizer per applicare il chat template.
-        """
         self.examples = examples
         self.tokenizer = tokenizer
 
@@ -90,19 +83,18 @@ class TiserWrapperDataset(Dataset):
     def __getitem__(self, idx):
         item = self.examples[idx]
 
-        # Per il training ci serve obbligatoriamente l'output (la risposta).
-        # Se è None (magari è un esempio di test), non possiamo addestrarci.
+        # Safety check per il training
         if item.output is None:
-            raise ValueError(f"L'esempio {item.question_id} non ha un output (target) valido per il training!")
+            # Fallback o errore a seconda della preferenza. Qui solleviamo errore.
+            raise ValueError(f"Esempio {item.question_id} senza output (target). Impossibile usare per training.")
 
-        prompt = item.prompt
-        output = item.output
-
+        # Costruzione messaggi stile Chat
         messages = [
-            {"role": "prompt", "content": prompt},
-            {"role": "output", "content": output}
+            {"role": "user", "content": item.prompt},  # Mapping: prompt -> user message
+            {"role": "assistant", "content": item.output}  # Mapping: output -> assistant message
         ]
 
+        # Applica il template di Qwen/ChatML senza tokenizzare subito
         formatted_text = self.tokenizer.apply_chat_template(messages, tokenize=False)
 
         return {"text": formatted_text}
