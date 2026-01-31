@@ -13,13 +13,13 @@ Features:
 
 Examples:
     # Process a single file
-    python scripts/run_preprocessing.py --input data/raw/TISER_train.json --output data/processed/TISER_train_10pct.json --ratio 0.1
+    python scripts/run_preprocessing.py --input src/data/raw/TISER_train.json --output src/data/processed/TISER_train_10pct.json --ratio 0.1
     
     # Process multiple train splits
-    python scripts/run_preprocessing.py --input-dir data/raw/ --output-dir data/processed/ --ratio 0.1 --seed 42
+    python scripts/run_preprocessing.py --input-dir src/data/raw/ --output-dir src/data/processed/ --ratio 0.1 --seed 42
     
     # Create multiple retention ratios
-    python scripts/run_preprocessing.py --input data/raw/TISER_train.json --output-prefix data/processed/TISER_train --ratios 0.05 0.1 0.25
+    python scripts/run_preprocessing.py --input src/data/raw/TISER_train.json --output-prefix src/data/processed/TISER_train --ratios 0.05 0.1 0.25
 """
 
 import argparse

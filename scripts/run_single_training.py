@@ -468,7 +468,7 @@ Examples:
     parser.add_argument(
         '--model', '-m',
         type=str,
-        default='Qwen/Qwen2.5-7B-Instruct',
+        default='Qwen/Qwen2.5-1.5B-Instruct',
         help='HuggingFace model identifier (default: Qwen/Qwen2.5-7B-Instruct)'
     )
     parser.add_argument(
