@@ -1,7 +1,7 @@
 """
 Ginny:
 python scripts/run_stats.py \
-    --variant all_stages,only_reasoning,no_timeline \
+    --variant no_reasoning \
     --test-file data/processed/TISER_test_10pct.json \
     --lora-path experiments/run_qwen_10pct \
 
