@@ -156,6 +156,8 @@ src/data/processed/*.json
 !src/data/raw/TISER_train_demo.json
 !src/data/processed/TISER_train_10pct_demo.json
 
+tools/datasets/
+
 # Model checkpoints and weights
 *.pt
 *.pth
