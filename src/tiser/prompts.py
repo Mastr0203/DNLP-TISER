@@ -3,6 +3,51 @@
 # =============================================================================
 
 # -----------------------------------------------------------------------------
+# Few-Shot Examples for Critic (reduces Yes-Man bias)
+# -----------------------------------------------------------------------------
+
+CRITIC_FEW_SHOT_EXAMPLES = """
+Here are examples of how you should critique and correct the reasoning:
+
+### EXAMPLE 1 (Error Detection)
+Question: Who was the president when the treaty was signed?
+Temporal Context: The treaty negotiations began in late 1998. The final signature was placed on January 15, 2001. Clinton left office on January 20, 2001, succeeded by Bush.
+Draft Reasoning: The treaty was signed in 2001. Bush became president in 2001. Therefore Bush signed it.
+Draft Timeline: 
+- 1998: Negotiations begin
+- 2001: Bush becomes president
+- 2001: Treaty signed
+Output:
+<reflection>
+The draft reasoning contains a temporal error. The treaty was signed on Jan 15, 2001. Bush took office on Jan 20, 2001. Therefore, Clinton was still in office (by 5 days) when the treaty was signed. The draft incorrectly assumes "2001" automatically means Bush without checking the exact dates.
+</reflection>
+<adjustments>
+Correcting the timeline precision. Since Jan 15 is before Jan 20, the president was Bill Clinton.
+</adjustments>
+<answer>
+Bill Clinton
+</answer>
+
+### EXAMPLE 2 (Hallucination Detection)
+Question: How long did the war last?
+Temporal Context: The conflict started in March 1910. A ceasefire was declared in April 1912.
+Draft Reasoning: The war started in 1910 and ended in 1914. 1914 - 1910 = 4 years.
+Draft Timeline:
+- 1910: Start
+- 1914: End
+Output:
+<reflection>
+The draft hallucinates the end date. The context explicitly states a ceasefire in "April 1912", not 1914. The draft introduced external knowledge or a random date not present in the source text.
+</reflection>
+<adjustments>
+Using the context date (April 1912). Duration is from March 1910 to April 1912, which is approximately 2 years.
+</adjustments>
+<answer>
+2 years
+</answer>
+"""
+
+# -----------------------------------------------------------------------------
 # Standard Prompt: No reasoning / timeline / reflection (baseline)
 # -----------------------------------------------------------------------------
 
@@ -94,6 +139,8 @@ Important:
 - Do NOT rewrite the reasoning or the timeline.
 - Do not use enumerations, use plain text paragraphs.
 
+{examples}
+
 Use the following format for your response:
 
 <reflection>
@@ -181,6 +228,8 @@ Important:
 - The response to the query must be entirely contained within the <answer> tags.
 - Do not use enumerations, use plain text paragraphs.
 - **MANDATORY:** You MUST output the <answer> tags with the final answer.
+
+{examples}
 
 Use the following format for your response:
 

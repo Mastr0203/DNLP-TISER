@@ -1,8 +1,9 @@
 """
 CLI Script for TISER Actor-Critic Inference Pipeline
-MODIFIED: Uniformed Format (Vertical Summary + Flattened Raw Output) + Dual-Mode Support
+MODIFIED: Uniformed Format (Vertical Summary + Flattened Raw Output) + Dual-Mode Support + Few-Shot Prompting
 
 - Supports both 3-stage (Actor -> Critic -> Solver) and 2-stage (Actor -> Critic+Solver) pipelines
+- Optional few-shot prompting for Critic/Solver to reduce "Yes-Man" bias
 - Flattened raw outputs for consistent CSV logging
 - Vertical summary format (Row per Dataset, plus __OVERALL__)
 
@@ -12,6 +13,12 @@ Examples:
     
     # 2-stage mode (more efficient)
     python scripts/run_actor_critic.py --test-file data/processed/TISER_test.json --pipeline-mode 2-stage --tag base_2stage
+    
+    # 3-stage with few-shot prompting
+    python scripts/run_actor_critic.py --test-file data/processed/TISER_test.json --use-few-shot --tag base_3stage_fewshot
+    
+    # 2-stage with few-shot prompting
+    python scripts/run_actor_critic.py --test-file data/processed/TISER_test.json --pipeline-mode 2-stage --use-few-shot
     
     # With LoRA adapter
     python scripts/run_actor_critic.py --test-file data/processed/TISER_test.json --lora checkpoints/tiser_lora_v1 --tag ft_run
@@ -44,7 +51,8 @@ from src.tiser.prompts import (
     TISER_PROMPT_TEMPLATE,
     CRITIC_PROMPT_TEMPLATE,
     FINAL_SOLVER_PROMPT_TEMPLATE,
-    CRITIC_SOLVER_PROMPT_TEMPLATE
+    CRITIC_SOLVER_PROMPT_TEMPLATE,
+    CRITIC_FEW_SHOT_EXAMPLES
 )
 
 # ==============================================================================
@@ -141,6 +149,7 @@ def generate_with_actor_critic_loop(
     top_p: float,
     max_retries: int = 2,
     pipeline_mode: str = "3-stage",
+    use_few_shot: bool = False,
 ) -> Dict[str, str]:
     """
     Executes the Actor-Critic pipeline in either 3-stage or 2-stage mode.
@@ -154,10 +163,14 @@ def generate_with_actor_critic_loop(
         top_p: Top-p sampling parameter
         max_retries: Maximum retries for answer generation
         pipeline_mode: Either "3-stage" (Actor->Critic->Solver) or "2-stage" (Actor->Critic+Solver)
+        use_few_shot: Whether to use few-shot examples in critic prompts
     
     Returns:
         Dictionary with final_answer, adjustments, stage1_raw, stage2_raw, stage3_raw
     """
+
+    # Determine examples content based on use_few_shot flag
+    examples_content = CRITIC_FEW_SHOT_EXAMPLES if use_few_shot else ""
 
     # === STAGE 1: THE ACTOR ===
     raw_stage_1 = llm.generate(
@@ -179,7 +192,8 @@ def generate_with_actor_critic_loop(
             question=question,
             context=context,
             draft_reasoning=draft_reasoning,
-            draft_timeline=draft_timeline
+            draft_timeline=draft_timeline,
+            examples=examples_content
         )
 
         raw_stage_2 = llm.generate(
@@ -229,7 +243,8 @@ def generate_with_actor_critic_loop(
             question=question,
             context=context,
             draft_reasoning=draft_reasoning,
-            draft_timeline=draft_timeline
+            draft_timeline=draft_timeline,
+            examples=examples_content
         )
 
         # Use generate_until_answer since the Critic+Solver MUST output an <answer> tag
@@ -278,6 +293,8 @@ def main():
     parser.add_argument("--max-retries", type=int, default=2, help="Max retries for Stage 3 token expansion")
     parser.add_argument("--pipeline-mode", type=str, default="3-stage", choices=["3-stage", "2-stage"], 
                         help="Pipeline mode: '3-stage' (Actor->Critic->Solver) or '2-stage' (Actor->Critic+Solver)")
+    parser.add_argument("--use-few-shot", action='store_true', 
+                        help="Enable few-shot prompting for Critic/Solver to reduce Yes-Man bias")
 
     args = parser.parse_args()
 
@@ -297,7 +314,17 @@ def main():
     
     # Determine default tag if not provided
     mode_suffix = "2stage" if args.pipeline_mode == "2-stage" else "3stage"
-    run_tag = args.tag if args.tag else (f"ft_critic_loop_{mode_suffix}" if args.lora else f"base_critic_loop_{mode_suffix}")
+    fewshot_suffix = "_fewshot" if args.use_few_shot else ""
+    
+    if args.tag:
+        run_tag = args.tag
+    else:
+        base_tag = f"ft_critic_loop_{mode_suffix}" if args.lora else f"base_critic_loop_{mode_suffix}"
+        run_tag = base_tag + fewshot_suffix
+
+    print(f"[INFO] Pipeline Mode: {args.pipeline_mode}")
+    print(f"[INFO] Few-Shot Prompting: {'ENABLED' if args.use_few_shot else 'DISABLED'}")
+    print(f"[INFO] Run Tag: {run_tag}")
 
     for i, ex in enumerate(examples, start=1):
         print(f"\n--- [{i}/{len(examples)}] Processing qid={ex.question_id} ---")
@@ -316,7 +343,8 @@ def main():
             temperature=args.temp,
             top_p=GEN_TOP_P,
             max_retries=args.max_retries,
-            pipeline_mode=args.pipeline_mode
+            pipeline_mode=args.pipeline_mode,
+            use_few_shot=args.use_few_shot
         )
         
         gold = ex.answer
