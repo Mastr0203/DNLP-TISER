@@ -3,10 +3,18 @@
 # =============================================================================
 
 # -----------------------------------------------------------------------------
+# Timeline Instruction Constants
+# -----------------------------------------------------------------------------
+
+TIMELINE_INSTRUCTION_LIST = "Identify relevant temporal events in the given context for answering the given question within <timeline> tags."
+
+TIMELINE_INSTRUCTION_TABLE = "Identify relevant temporal events and format them as a Markdown table with columns | Date | Event | within <timeline> tags."
+
+# -----------------------------------------------------------------------------
 # Few-Shot Examples for Critic (reduces Yes-Man bias)
 # -----------------------------------------------------------------------------
 
-CRITIC_FEW_SHOT_EXAMPLES = """
+CRITIC_FEW_SHOT_EXAMPLES_LIST = """
 Here are examples of how you should critique and correct the reasoning:
 
 ### EXAMPLE 1 (Error Detection)
@@ -47,6 +55,55 @@ Using the context date (April 1912). Duration is from March 1910 to April 1912, 
 </answer>
 """
 
+# Backward compatibility: CRITIC_FEW_SHOT_EXAMPLES points to LIST version by default
+CRITIC_FEW_SHOT_EXAMPLES = CRITIC_FEW_SHOT_EXAMPLES_LIST
+
+# Table-format Few-Shot Examples
+CRITIC_FEW_SHOT_EXAMPLES_TABLE = """
+Here are examples of how you should critique and correct the reasoning:
+
+### EXAMPLE 1 (Error Detection)
+Question: Who was the president when the treaty was signed?
+Temporal Context: The treaty negotiations began in late 1998. The final signature was placed on January 15, 2001. Clinton left office on January 20, 2001, succeeded by Bush.
+Draft Reasoning: The treaty was signed in 2001. Bush became president in 2001. Therefore Bush signed it.
+Draft Timeline: 
+| Date | Event |
+| :--- | :--- |
+| 1998 | Negotiations begin |
+| 2001 | Bush becomes president |
+| 2001 | Treaty signed |
+Output:
+<reflection>
+The draft reasoning contains a temporal error. The treaty was signed on Jan 15, 2001. Bush took office on Jan 20, 2001. Therefore, Clinton was still in office (by 5 days) when the treaty was signed. The draft incorrectly assumes "2001" automatically means Bush without checking the exact dates.
+</reflection>
+<adjustments>
+Correcting the timeline precision. Since Jan 15 is before Jan 20, the president was Bill Clinton.
+</adjustments>
+<answer>
+Bill Clinton
+</answer>
+
+### EXAMPLE 2 (Hallucination Detection)
+Question: How long did the war last?
+Temporal Context: The conflict started in March 1910. A ceasefire was declared in April 1912.
+Draft Reasoning: The war started in 1910 and ended in 1914. 1914 - 1910 = 4 years.
+Draft Timeline:
+| Date | Event |
+| :--- | :--- |
+| 1910 | Start |
+| 1914 | End |
+Output:
+<reflection>
+The draft hallucinates the end date. The context explicitly states a ceasefire in "April 1912", not 1914. The draft introduced external knowledge or a random date not present in the source text.
+</reflection>
+<adjustments>
+Using the context date (April 1912). Duration is from March 1910 to April 1912, which is approximately 2 years.
+</adjustments>
+<answer>
+2 years
+</answer>
+"""
+
 # -----------------------------------------------------------------------------
 # Standard Prompt: No reasoning / timeline / reflection (baseline)
 # -----------------------------------------------------------------------------
@@ -75,7 +132,7 @@ TISER_PROMPT_TEMPLATE = """You are an AI assistant that uses a Chain of Thought 
 
 Follow these steps:
 1. Reason through the problem step by step within the <reasoning> tags.
-2. Given your previous reasoning, identify relevant temporal events in the given context for answering the given question within <timeline> tags. Assume relations in the context are unidirectional.
+2. Given your previous reasoning, {timeline_instruction} Assume relations in the context are unidirectional.
 3. Reflect on your reasoning and the timeline to check for any errors or improvements within the <reflection> tags.
 4. Make any necessary adjustments based on your reflection. If there is additional reasoning required, go back to Step 1, otherwise move to the next step.
 5. Provide your final, concise answer within the <answer> tags. If the answer is a number, just output the number, nothing else. Otherwise, output the entity or event without any additional comments.
