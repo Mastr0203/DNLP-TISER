@@ -1,14 +1,20 @@
 """
 CLI Script for TISER Actor-Critic Inference Pipeline
-MODIFIED: Uniformed Format (Vertical Summary + Flattened Raw Output)
+MODIFIED: Uniformed Format (Vertical Summary + Flattened Raw Output) + Dual-Mode Support
 
-- Supports Actor -> Critic -> Solver loop
+- Supports both 3-stage (Actor -> Critic -> Solver) and 2-stage (Actor -> Critic+Solver) pipelines
 - Flattened raw outputs for consistent CSV logging
 - Vertical summary format (Row per Dataset, plus __OVERALL__)
 
 Examples:
-    python scripts/run_pipeline.py --test-file data/processed/TISER_test.json --tag base_run
-    python scripts/run_pipeline.py --test-file data/processed/TISER_test.json --lora checkpoints/tiser_lora_v1 --tag ft_run
+    # 3-stage mode (default)
+    python scripts/run_actor_critic.py --test-file data/processed/TISER_test.json --tag base_run
+    
+    # 2-stage mode (more efficient)
+    python scripts/run_actor_critic.py --test-file data/processed/TISER_test.json --pipeline-mode 2-stage --tag base_2stage
+    
+    # With LoRA adapter
+    python scripts/run_actor_critic.py --test-file data/processed/TISER_test.json --lora checkpoints/tiser_lora_v1 --tag ft_run
 """
 
 import sys
@@ -37,7 +43,8 @@ from src.tiser.parsing import extract_answer, extract_section
 from src.tiser.prompts import (
     TISER_PROMPT_TEMPLATE,
     CRITIC_PROMPT_TEMPLATE,
-    FINAL_SOLVER_PROMPT_TEMPLATE
+    FINAL_SOLVER_PROMPT_TEMPLATE,
+    CRITIC_SOLVER_PROMPT_TEMPLATE
 )
 
 # ==============================================================================
@@ -132,10 +139,24 @@ def generate_with_actor_critic_loop(
     context: str,
     temperature: float,
     top_p: float,
-    max_retries: int = 2, 
+    max_retries: int = 2,
+    pipeline_mode: str = "3-stage",
 ) -> Dict[str, str]:
     """
-    Executes the 3-stage pipeline.
+    Executes the Actor-Critic pipeline in either 3-stage or 2-stage mode.
+    
+    Args:
+        llm: The language model wrapper
+        original_prompt: The initial Actor prompt
+        question: The question to answer
+        context: The temporal context
+        temperature: Generation temperature
+        top_p: Top-p sampling parameter
+        max_retries: Maximum retries for answer generation
+        pipeline_mode: Either "3-stage" (Actor->Critic->Solver) or "2-stage" (Actor->Critic+Solver)
+    
+    Returns:
+        Dictionary with final_answer, adjustments, stage1_raw, stage2_raw, stage3_raw
     """
 
     # === STAGE 1: THE ACTOR ===
@@ -152,54 +173,89 @@ def generate_with_actor_critic_loop(
     if not draft_reasoning: draft_reasoning = raw_stage_1
     if not draft_timeline: draft_timeline = "Timeline tag missing in draft."
 
-    # === STAGE 2: THE CRITIC ===
-    critic_prompt = CRITIC_PROMPT_TEMPLATE.format(
-        question=question,
-        context=context,
-        draft_reasoning=draft_reasoning,
-        draft_timeline=draft_timeline
-    )
+    if pipeline_mode == "3-stage":
+        # === STAGE 2: THE CRITIC (3-stage mode) ===
+        critic_prompt = CRITIC_PROMPT_TEMPLATE.format(
+            question=question,
+            context=context,
+            draft_reasoning=draft_reasoning,
+            draft_timeline=draft_timeline
+        )
 
-    raw_stage_2 = llm.generate(
-        prompt=critic_prompt,
-        max_new_tokens=512, 
-        temperature=temperature, 
-        top_p=top_p
-    )
+        raw_stage_2 = llm.generate(
+            prompt=critic_prompt,
+            max_new_tokens=512, 
+            temperature=temperature, 
+            top_p=top_p
+        )
 
-    critic_reflection = extract_section(raw_stage_2, "reflection")
-    if not critic_reflection: critic_reflection = raw_stage_2 
+        critic_reflection = extract_section(raw_stage_2, "reflection")
+        if not critic_reflection: critic_reflection = raw_stage_2 
 
-    # === STAGE 3: THE FINAL SOLVER ===
-    final_prompt = FINAL_SOLVER_PROMPT_TEMPLATE.format(
-        question=question,
-        context=context,
-        draft_reasoning=draft_reasoning,
-        draft_timeline=draft_timeline,
-        critic_reflection=critic_reflection
-    )
+        # === STAGE 3: THE FINAL SOLVER ===
+        final_prompt = FINAL_SOLVER_PROMPT_TEMPLATE.format(
+            question=question,
+            context=context,
+            draft_reasoning=draft_reasoning,
+            draft_timeline=draft_timeline,
+            critic_reflection=critic_reflection
+        )
+        
+        raw_stage_3 = generate_until_answer(
+            llm=llm,
+            prompt=final_prompt,
+            max_new_tokens=256,
+            temperature=temperature,
+            top_p=top_p,
+            max_retries=max_retries,
+            growth=2.0,
+            hard_cap=2048
+        )
+
+        final_answer_text = extract_answer(raw_stage_3)
+        adjustments_text = extract_section(raw_stage_3, "adjustments")
+
+        return {
+            "final_answer": final_answer_text,
+            "adjustments": adjustments_text,
+            "stage1_raw": raw_stage_1,
+            "stage2_raw": raw_stage_2,
+            "stage3_raw": raw_stage_3,
+        }
     
-    raw_stage_3 = generate_until_answer(
-        llm=llm,
-        prompt=final_prompt,
-        max_new_tokens=256,
-        temperature=temperature,
-        top_p=top_p,
-        max_retries=max_retries,
-        growth=2.0,
-        hard_cap=2048
-    )
+    else:  # pipeline_mode == "2-stage"
+        # === STAGE 2: THE CRITIC+SOLVER (2-stage mode) ===
+        critic_solver_prompt = CRITIC_SOLVER_PROMPT_TEMPLATE.format(
+            question=question,
+            context=context,
+            draft_reasoning=draft_reasoning,
+            draft_timeline=draft_timeline
+        )
 
-    final_answer_text = extract_answer(raw_stage_3)
-    adjustments_text = extract_section(raw_stage_3, "adjustments")
+        # Use generate_until_answer since the Critic+Solver MUST output an <answer> tag
+        raw_stage_2 = generate_until_answer(
+            llm=llm,
+            prompt=critic_solver_prompt,
+            max_new_tokens=512,
+            temperature=temperature,
+            top_p=top_p,
+            max_retries=max_retries,
+            growth=2.0,
+            hard_cap=2048
+        )
 
-    return {
-        "final_answer": final_answer_text,
-        "adjustments": adjustments_text,
-        "stage1_raw": raw_stage_1,
-        "stage2_raw": raw_stage_2,
-        "stage3_raw": raw_stage_3,
-    }
+        # Extract components from the combined output
+        critic_reflection = extract_section(raw_stage_2, "reflection")
+        adjustments_text = extract_section(raw_stage_2, "adjustments")
+        final_answer_text = extract_answer(raw_stage_2)
+
+        return {
+            "final_answer": final_answer_text,
+            "adjustments": adjustments_text,
+            "stage1_raw": raw_stage_1,
+            "stage2_raw": raw_stage_2,
+            "stage3_raw": "N/A (Merged in Stage 2)",
+        }
 
 
 def build_model(mode: str = "dev", lora_path: Optional[str] = None) -> LLMWrapper:
@@ -220,6 +276,8 @@ def main():
     parser.add_argument("--tag", type=str, default=None)
     parser.add_argument("--temp", type=float, default=GEN_TEMPERATURE)
     parser.add_argument("--max-retries", type=int, default=2, help="Max retries for Stage 3 token expansion")
+    parser.add_argument("--pipeline-mode", type=str, default="3-stage", choices=["3-stage", "2-stage"], 
+                        help="Pipeline mode: '3-stage' (Actor->Critic->Solver) or '2-stage' (Actor->Critic+Solver)")
 
     args = parser.parse_args()
 
@@ -238,7 +296,8 @@ def main():
     csv_rows = []
     
     # Determine default tag if not provided
-    run_tag = args.tag if args.tag else ("ft_critic_loop" if args.lora else "base_critic_loop")
+    mode_suffix = "2stage" if args.pipeline_mode == "2-stage" else "3stage"
+    run_tag = args.tag if args.tag else (f"ft_critic_loop_{mode_suffix}" if args.lora else f"base_critic_loop_{mode_suffix}")
 
     for i, ex in enumerate(examples, start=1):
         print(f"\n--- [{i}/{len(examples)}] Processing qid={ex.question_id} ---")
@@ -256,7 +315,8 @@ def main():
             context=ex.context,
             temperature=args.temp,
             top_p=GEN_TOP_P,
-            max_retries=args.max_retries
+            max_retries=args.max_retries,
+            pipeline_mode=args.pipeline_mode
         )
         
         gold = ex.answer
@@ -271,7 +331,9 @@ def main():
             f"[STAGE 3: SOLVER] {result['stage3_raw']}"
         )
         
-        has_answer_tag = "<answer>" in result["stage3_raw"].lower()
+        # For 2-stage mode, answer tag is in stage2_raw; for 3-stage mode, it's in stage3_raw
+        answer_containing_stage = result['stage2_raw'] if args.pipeline_mode == "2-stage" else result['stage3_raw']
+        has_answer_tag = "<answer>" in answer_containing_stage.lower()
 
         csv_rows.append({
             "idx": i,

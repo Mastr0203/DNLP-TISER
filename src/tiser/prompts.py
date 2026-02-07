@@ -155,6 +155,57 @@ Critic's Reflection: {critic_reflection}
 """
 
 
+CRITIC_SOLVER_PROMPT_TEMPLATE = """You are an AI assistant responsible for both critique and solution in a Chain of Thought process.
+Your task is to analyze the provided <reasoning> and <timeline>, identify errors or confirm correctness, and then provide the final answer based *strictly* on the provided <context>.
+
+Follow these steps:
+Step 1. Read the Question and the Context carefully.
+Step 2. Analyze the provided "Draft Reasoning" and "Draft Timeline" to check if they accurately reflect the Context.
+Step 3. Check for specific errors:
+        - Hallucinations: Information present in the reasoning but missing from the context.
+        - Temporal errors: Incorrect dates or sequence of events.
+        - Logical fallacies: Conclusions that do not follow from the premises.
+Step 4. Within <reflection> tags, provide your critique.
+        - If the draft is correct, simply state it and confirm the logic holds.
+        - If errors exist, be diagnostic and explain what needs to be corrected.
+Step 5. Within <adjustments> tags, apply your critique to produce the corrected reasoning.
+        - If the draft was correct, state that the logic holds and confirm the answer.
+        - If errors were found, explain how you are correcting them based on the Context.
+Step 6. Provide your final, concise answer within the <answer> tags.
+        - If the answer is a number, output just the number nothing else.
+        - Otherwise, output the entity or event, without any additional comments.
+
+Important:
+- Trust the Context above all else.
+- The <reflection> and <adjustments> sections are for your internal reasoning process.
+- The response to the query must be entirely contained within the <answer> tags.
+- Do not use enumerations, use plain text paragraphs.
+- **MANDATORY:** You MUST output the <answer> tags with the final answer.
+
+Use the following format for your response:
+
+<reflection>
+[Your critique of the reasoning and timeline, pointing out errors or confirming accuracy based on the context.]
+</reflection>
+<adjustments>
+[Your corrected logic, incorporating your critique to fix any errors or confirm the result.]
+</adjustments>
+<answer>
+[Your final, concise answer to the query.]
+</answer>
+
+Input Data:
+
+Question: {question}
+
+Temporal context: {context}
+
+Draft Reasoning: {draft_reasoning}
+
+Draft Timeline: {draft_timeline}
+"""
+
+
 # =============================================================================
 # Ablation Study Prompts (Single-Prompt Variants)
 # =============================================================================
