@@ -156,8 +156,6 @@ src/data/processed/*.json
 !src/data/raw/TISER_train_demo.json
 !src/data/processed/TISER_train_10pct_demo.json
 
-tools/datasets/
-
 # Model checkpoints and weights
 *.pt
 *.pth
@@ -216,3 +214,9 @@ report/*.synctex.gz
 report/*.toc
 
 >>>>>>> origin/andrea-00
+
+# .gitignore for Multilingual extension
+tools/translation/.translation_progress.json
+tools/datasets/
+tools/translation/TISER_it.jsonl
+tools/translation/chunks_to_translate
