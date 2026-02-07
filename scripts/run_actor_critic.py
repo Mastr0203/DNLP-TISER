@@ -45,7 +45,7 @@ from src.config import (
 )
 from src.models.base_model import LLMWrapper
 from src.data.tiser_dataset import load_tiser_file
-from src.tiser.metrics import compute_em_f1
+from src.tiser.metrics import compute_em_f1, compute_metrics
 from src.tiser.parsing import extract_answer, extract_section
 from src.tiser.prompts import (
     TISER_PROMPT_TEMPLATE,
@@ -66,7 +66,7 @@ def flatten_text(text: str) -> str:
 
 def compute_detailed_metrics(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    Computes EM and F1 for each dataset AND an overall aggregate.
+    Computes EM, F1, and SM for each dataset AND an overall aggregate.
     Returns a list of dictionaries ready for the summary CSV.
     Matches the format of the ablation script.
     """
@@ -83,22 +83,24 @@ def compute_detailed_metrics(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]
 
     # 2. Calculate per-dataset metrics
     for ds_name, pairs in grouped.items():
-        em, f1 = compute_em_f1(pairs)
+        metrics = compute_metrics(pairs)
         metrics_list.append({
             "dataset_name": ds_name,
             "n": len(pairs),
-            "em": em,
-            "f1": f1
+            "em": metrics["em"],
+            "f1": metrics["f1"],
+            "sm": metrics["sm"]
         })
     
     # 3. Calculate Overall metrics (Micro-average)
     if all_pairs:
-        ov_em, ov_f1 = compute_em_f1(all_pairs)
+        metrics = compute_metrics(all_pairs)
         metrics_list.append({
             "dataset_name": "__OVERALL__",
             "n": len(all_pairs),
-            "em": ov_em,
-            "f1": ov_f1
+            "em": metrics["em"],
+            "f1": metrics["f1"],
+            "sm": metrics["sm"]
         })
 
     # Sort alphabetically
@@ -379,7 +381,7 @@ def main():
 
     print("\n[RESULTS SUMMARY]")
     for stat in stats_list:
-        print(f"  - {stat['dataset_name']:20s} | N={stat['n']:3d} | EM={stat['em']:.4f} | F1={stat['f1']:.4f}")
+        print(f"  - {stat['dataset_name']:20s} | N={stat['n']:3d} | EM={stat['em']:.4f} | F1={stat['f1']:.4f} | SM={stat['sm']:.4f}")
 
     # --- Save Detailed Logs (Flattened) ---
     out_csv = RESULTS_DIR / f"actor_critic_results_{run_tag}.csv"
@@ -401,7 +403,7 @@ def main():
 
     with summary_csv.open("w", encoding="utf-8", newline="") as f:
         # Matches the ablation script structure (minus 'variant', using 'tag' instead)
-        fieldnames = ["tag", "dataset_name", "n", "em", "f1"]
+        fieldnames = ["tag", "dataset_name", "n", "em", "f1", "sm"]
         w = csv.DictWriter(f, fieldnames=fieldnames)
         w.writeheader()
         
@@ -412,6 +414,7 @@ def main():
                 "n": stat["n"],
                 "em": f"{stat['em']:.4f}",
                 "f1": f"{stat['f1']:.4f}",
+                "sm": f"{stat['sm']:.4f}",
             })
 
 if __name__ == "__main__":
