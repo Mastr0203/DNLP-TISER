@@ -48,7 +48,9 @@ from src.tiser.prompts import (
     ABLATION_NO_REFLECTION_PROMPT_TEMPLATE,          
     ABLATION_NO_TIMELINE_PROMPT_TEMPLATE,            
     ABLATION_NO_REASONING_PROMPT_TEMPLATE,           
-    TISER_PROMPT_TEMPLATE,             
+    TISER_PROMPT_TEMPLATE,
+    TISER_PROMPT_TEMPLATE_IT,
+    STANDARD_PROMPT_TEMPLATE_IT
 )
 
 VARIANT_PROMPTS: Dict[str, str] = {
@@ -58,7 +60,7 @@ VARIANT_PROMPTS: Dict[str, str] = {
     "no_reflection": ABLATION_NO_REFLECTION_PROMPT_TEMPLATE,
     "no_timeline": ABLATION_NO_TIMELINE_PROMPT_TEMPLATE,
     "no_reasoning": ABLATION_NO_REASONING_PROMPT_TEMPLATE,
-    "all_stages": TISER_PROMPT_TEMPLATE,
+    "all_stages": TISER_PROMPT_TEMPLATE
 }
 
 # ======================================================================
@@ -141,12 +143,12 @@ def generate_until_answer(
 # MODEL
 # ======================================================================
 
-def build_model(mode: str = "dev", lora_path: Optional[str] = None) -> LLMWrapper:
+def build_model(mode: str = "dev", lang: str = "en", lora_path: Optional[str] = None) -> LLMWrapper:
     """
     Builds the model wrapper.
     If lora_path is provided, it is passed to the LLMWrapper.
     """
-    model_name = get_model_name(mode=mode, lang="en", role="actor")
+    model_name = get_model_name(mode=mode, lang=lang, role="actor")
     
     print(f"[MODEL] Base model: {model_name}")
     if lora_path:
@@ -174,8 +176,13 @@ def main():
     parser.add_argument("--max-retries", type=int, default=2)
     parser.add_argument("--variants", type=str, default=",".join(DEFAULT_VARIANTS))
     parser.add_argument("--lora-path", type=str, default=None, help="Path to fine-tuned LoRA adapter (optional)")
+    parser.add_argument("--lang", type=str, default="en", choices=["en", "it"], help="Language for model and prompt templates")
 
     args = parser.parse_args()
+
+    if args.lang == "it":
+        VARIANT_PROMPTS["standard"] = STANDARD_PROMPT_TEMPLATE_IT
+        VARIANT_PROMPTS["all_stages"] = TISER_PROMPT_TEMPLATE_IT
 
     test_path = Path(args.test_file)
     if not test_path.exists():
@@ -194,7 +201,7 @@ def main():
 
     print(f"[INFO] Initializing model (mode={args.mode})")
     # MODIFIED CALL
-    llm = build_model(mode=args.mode, lora_path=args.lora_path)
+    llm = build_model(mode=args.mode, lang=args.lang, lora_path=args.lora_path)
 
     # This list will hold rows for the final SUMMARY csv
     global_summary_rows: List[Dict[str, Any]] = []
