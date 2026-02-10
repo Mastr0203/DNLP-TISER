@@ -220,3 +220,4 @@ tools/translation/.translation_progress.json
 tools/datasets/
 tools/translation/TISER_it.jsonl
 tools/translation/chunks_to_translate
+DNLP-TISER/experiments/qwen2p5_1p5b_tiser_it_lora
