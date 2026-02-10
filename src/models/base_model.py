@@ -94,26 +94,30 @@ class LLMWrapper:
     def _build_inputs(self, prompt: str) -> tuple[torch.Tensor, int]:
         """
         Costruisce input_ids e ritorna anche input_len (per tagliare l'output generato).
-
+    
         Se esiste una chat_template nel tokenizer, usa apply_chat_template con
         add_generation_prompt=True (fondamentale per molti Instruct model).
         Altrimenti fallback: tokenizzazione diretta del prompt.
         """
-        # Chat-template path (Qwen Instruct, Mistral Instruct, ecc.)
         has_chat_template = (
             hasattr(self.tokenizer, "chat_template")
             and self.tokenizer.chat_template is not None
             and str(self.tokenizer.chat_template).strip() != ""
         )
-
+    
         if has_chat_template:
             messages = [{"role": "user", "content": prompt}]
-            input_ids = self.tokenizer.apply_chat_template(
+            enc = self.tokenizer.apply_chat_template(
                 messages,
                 add_generation_prompt=True,
                 tokenize=True,
                 return_tensors="pt",
             )
+            # Alcuni tokenizer ritornano direttamente un Tensor, altri un BatchEncoding/dict
+            if isinstance(enc, torch.Tensor):
+                input_ids = enc
+            else:
+                input_ids = enc["input_ids"]
         else:
             enc = self.tokenizer(
                 prompt,
@@ -121,7 +125,7 @@ class LLMWrapper:
                 add_special_tokens=True,
             )
             input_ids = enc["input_ids"]
-
+    
         input_ids = input_ids.to(self.device)
         input_len = input_ids.shape[-1]
         return input_ids, input_len
