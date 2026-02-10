@@ -1,0 +1,8 @@
+tag,dataset_name,n,em,f1
+run_base_actor_critic,tempreason_l2_test,530,0.22641509433962265,0.3531770848134685
+run_base_actor_critic,tempreason_l3_test,417,0.18465227817745802,0.3569433474652116
+run_base_actor_critic,tgqa_test,282,0.23049645390070922,0.3136947773131032
+run_base_actor_critic,timeqa_easy_test,301,0.49169435215946844,0.6113245576482379
+run_base_actor_critic,timeqa_hard_test,320,0.309375,0.4132230600598289
+run_base_actor_critic,tot_semantic_test,246,0.10569105691056911,0.11012564671101256
+run_base_actor_critic,__MACRO_AVG__,2096,0.25805403924797127,

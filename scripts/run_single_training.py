@@ -54,6 +54,7 @@ from trl import SFTTrainer, DataCollatorForCompletionOnlyLM, SFTConfig
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.data.tiser_dataset import TiserDataset, load_tiser_file
+from transformers import DataCollatorForLanguageModeling
 
 logger = logging.getLogger(__name__)
 
@@ -147,37 +148,12 @@ def load_dataset(data_path: Path, tokenizer, max_examples: Optional[int] = None)
     return train_dataset
 
 
-def setup_data_collator(tokenizer, response_template: str = "<|im_start|>assistant\n"):
-    """
-    Create data collator for completion-only training. The collator is responsible for:
-    Padding sequences: Different text sequences might have different lengths. The data colltor pads these sequences to the same length so that they can be processed in parallel in a batch
-    Creating Attention Masks: When padding sequences, the data collator also creates attention masks to inform the model which tokens are real and which are just padding.
-    Handling Special Tokens: Some models require special tokens (like start and end tokens) in the input. The data collator can add these as needed.
-    
-    Args:
-        tokenizer: Tokenizer to use
-        response_template: Template marking the start of assistant response
-        
-    Returns:
-        DataCollatorForCompletionOnlyLM
-    """
-    #We use this collator because forces the model to try to learn only the response, not the question. The colletor
-    #is indeed responsible to associate -inf labels to the corresponding pad token inserted, but DataCollatorForCompletionOnlyLM
-    #is used to force the model to learn only how to minimize the loss on the response, avoiding useless mnemonic work
-    #to learn the question. For example:
-    #A classic collator would do the following:
-    #input_ids: [User] [Prompt] [Assist] [Resp] [PAD]
-    #labels: [User] [Prompt] [Assist] [Resp] [-100]
-    #DataCollatorForCompletionOnlyLM would do this instead:
-    #input_ids: [User] [Prompt] [Assist] [Resp] [PAD]
-    #labels: [-100] [-100] [-100] [Resp] [-100]
-    collator = DataCollatorForCompletionOnlyLM(
-        response_template=response_template,
-        tokenizer=tokenizer
+def setup_data_collator(tokenizer, response_template: str = None):
+    collator = DataCollatorForLanguageModeling(
+        tokenizer=tokenizer,
+        mlm=False
     )
-    
-    logger.info("Data collator configured for completion-only training")
-    
+    logger.info("Data collator configured for standard causal LM training (no completion-only masking)")
     return collator
 
 
