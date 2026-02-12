@@ -331,25 +331,23 @@ Fornisci la tua risposta finale e concisa all'interno dei tag <answer>.
 Se la risposta è un numero, riporta solo il numero, senza nient'altro. In caso contrario, riporta l'entità o l'evento senza alcun commento aggiuntivo.
 
 Importante:
-• La risposta deve essere interamente contenuta all'interno dei tag <answer>.
-• Non utilizzare enumerazioni o liste nello stile di scrittura; usa testo semplice sotto forma di paragrafi.
+La risposta deve essere interamente contenuta all'interno dei tag <answer>.
+Non utilizzare enumerazioni o liste nello stile di scrittura; usa testo semplice sotto forma di paragrafi.
 
 Formato della risposta:
 <answer>
 [La tua risposta finale.]
 </answer>
 
-Domanda: {question}
-Contesto temporale: {context}"""
+Question: {question}
+Temporal context: {context}"""
 
 
 # -----------------------------------------------------------------------------
 # FULL TISER Prompt (Italian): Reasoning -> Timeline -> Reflection -> Answer
 # -----------------------------------------------------------------------------
 
-TISER_PROMPT_TEMPLATE_IT = """### Question:
-
-Sei un assistente AI che utilizza un approccio di Chain of Thought (CoT) con riflessione per rispondere alle domande. Segui questi passaggi:
+TISER_PROMPT_TEMPLATE_IT = """Sei un assistente AI che utilizza un approccio di Chain of Thought (CoT) con riflessione per rispondere alle domande. Segui questi passaggi:
 
 Passaggio 1. Ragiona sul problema passo dopo passo all'interno dei tag <reasoning>.
 Passaggio 2. Sulla base del ragionamento precedente, identifica gli eventi temporali rilevanti nel contesto fornito per rispondere alla domanda all'interno dei tag <timeline>. Assumi che le relazioni nel contesto siano unidirezionali.
@@ -379,7 +377,4 @@ Utilizza il seguente formato per la tua risposta:
 </answer>
 
 Question: {question}
-
-Temporal context: {context}
-
-### Answer:"""
+Temporal context: {context}"""
