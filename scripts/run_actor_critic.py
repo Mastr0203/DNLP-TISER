@@ -1,14 +1,27 @@
 """
 CLI Script for TISER Actor-Critic Inference Pipeline
-MODIFIED: Uniformed Format (Vertical Summary + Flattened Raw Output)
+MODIFIED: Uniformed Format (Vertical Summary + Flattened Raw Output) + Dual-Mode Support + Few-Shot Prompting
 
-- Supports Actor -> Critic -> Solver loop
+- Supports both 3-stage (Actor -> Critic -> Solver) and 2-stage (Actor -> Critic+Solver) pipelines
+- Optional few-shot prompting for Critic/Solver to reduce "Yes-Man" bias
 - Flattened raw outputs for consistent CSV logging
 - Vertical summary format (Row per Dataset, plus __OVERALL__)
 
 Examples:
-    python scripts/run_pipeline.py --test-file data/processed/TISER_test.json --tag base_run
-    python scripts/run_pipeline.py --test-file data/processed/TISER_test.json --lora checkpoints/tiser_lora_v1 --tag ft_run
+    # 3-stage mode (default)
+    python scripts/run_actor_critic.py --test-file data/processed/TISER_test.json --tag base_run
+    
+    # 2-stage mode (more efficient)
+    python scripts/run_actor_critic.py --test-file data/processed/TISER_test.json --pipeline-mode 2-stage --tag base_2stage
+    
+    # 3-stage with few-shot prompting
+    python scripts/run_actor_critic.py --test-file data/processed/TISER_test.json --use-few-shot --tag base_3stage_fewshot
+    
+    # 2-stage with few-shot prompting
+    python scripts/run_actor_critic.py --test-file data/processed/TISER_test.json --pipeline-mode 2-stage --use-few-shot
+    
+    # With LoRA adapter
+    python scripts/run_actor_critic.py --test-file data/processed/TISER_test.json --lora checkpoints/tiser_lora_v1 --tag ft_run
 """
 
 import sys
@@ -32,12 +45,18 @@ from src.config import (
 )
 from src.models.base_model import LLMWrapper
 from src.data.tiser_dataset import load_tiser_file
-from src.tiser.metrics import compute_em_f1
+from src.tiser.metrics import compute_em_f1, compute_metrics
 from src.tiser.parsing import extract_answer, extract_section
 from src.tiser.prompts import (
     TISER_PROMPT_TEMPLATE,
     CRITIC_PROMPT_TEMPLATE,
-    FINAL_SOLVER_PROMPT_TEMPLATE
+    FINAL_SOLVER_PROMPT_TEMPLATE,
+    CRITIC_SOLVER_PROMPT_TEMPLATE,
+    CRITIC_FEW_SHOT_EXAMPLES,
+    CRITIC_FEW_SHOT_EXAMPLES_LIST,
+    CRITIC_FEW_SHOT_EXAMPLES_TABLE,
+    TIMELINE_INSTRUCTION_LIST,
+    TIMELINE_INSTRUCTION_TABLE,
 )
 
 # ==============================================================================
@@ -51,7 +70,7 @@ def flatten_text(text: str) -> str:
 
 def compute_detailed_metrics(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    Computes EM and F1 for each dataset AND an overall aggregate.
+    Computes EM, F1, and SM for each dataset AND an overall aggregate.
     Returns a list of dictionaries ready for the summary CSV.
     Matches the format of the ablation script.
     """
@@ -68,22 +87,24 @@ def compute_detailed_metrics(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]
 
     # 2. Calculate per-dataset metrics
     for ds_name, pairs in grouped.items():
-        em, f1 = compute_em_f1(pairs)
+        metrics = compute_metrics(pairs)
         metrics_list.append({
             "dataset_name": ds_name,
             "n": len(pairs),
-            "em": em,
-            "f1": f1
+            "em": metrics["em"],
+            "f1": metrics["f1"],
+            "sm": metrics["sm"]
         })
     
     # 3. Calculate Overall metrics (Micro-average)
     if all_pairs:
-        ov_em, ov_f1 = compute_em_f1(all_pairs)
+        metrics = compute_metrics(all_pairs)
         metrics_list.append({
             "dataset_name": "__OVERALL__",
             "n": len(all_pairs),
-            "em": ov_em,
-            "f1": ov_f1
+            "em": metrics["em"],
+            "f1": metrics["f1"],
+            "sm": metrics["sm"]
         })
 
     # Sort alphabetically
@@ -132,11 +153,35 @@ def generate_with_actor_critic_loop(
     context: str,
     temperature: float,
     top_p: float,
-    max_retries: int = 2, 
+    max_retries: int = 2,
+    pipeline_mode: str = "3-stage",
+    use_few_shot: bool = False,
+    timeline_format: str = "list",
 ) -> Dict[str, str]:
     """
-    Executes the 3-stage pipeline.
+    Executes the Actor-Critic pipeline in either 3-stage or 2-stage mode.
+    
+    Args:
+        llm: The language model wrapper
+        original_prompt: The initial Actor prompt
+        question: The question to answer
+        context: The temporal context
+        temperature: Generation temperature
+        top_p: Top-p sampling parameter
+        max_retries: Maximum retries for answer generation
+        pipeline_mode: Either "3-stage" (Actor->Critic->Solver) or "2-stage" (Actor->Critic+Solver)
+        use_few_shot: Whether to use few-shot examples in critic prompts
+        timeline_format: Either "list" or "table" for timeline formatting
+    
+    Returns:
+        Dictionary with final_answer, adjustments, stage1_raw, stage2_raw, stage3_raw
     """
+
+    # Determine examples content based on use_few_shot flag and timeline format
+    if use_few_shot:
+        examples_content = CRITIC_FEW_SHOT_EXAMPLES_TABLE if timeline_format == "table" else CRITIC_FEW_SHOT_EXAMPLES_LIST
+    else:
+        examples_content = ""
 
     # === STAGE 1: THE ACTOR ===
     raw_stage_1 = llm.generate(
@@ -152,54 +197,91 @@ def generate_with_actor_critic_loop(
     if not draft_reasoning: draft_reasoning = raw_stage_1
     if not draft_timeline: draft_timeline = "Timeline tag missing in draft."
 
-    # === STAGE 2: THE CRITIC ===
-    critic_prompt = CRITIC_PROMPT_TEMPLATE.format(
-        question=question,
-        context=context,
-        draft_reasoning=draft_reasoning,
-        draft_timeline=draft_timeline
-    )
+    if pipeline_mode == "3-stage":
+        # === STAGE 2: THE CRITIC (3-stage mode) ===
+        critic_prompt = CRITIC_PROMPT_TEMPLATE.format(
+            question=question,
+            context=context,
+            draft_reasoning=draft_reasoning,
+            draft_timeline=draft_timeline,
+            examples=examples_content
+        )
 
-    raw_stage_2 = llm.generate(
-        prompt=critic_prompt,
-        max_new_tokens=512, 
-        temperature=temperature, 
-        top_p=top_p
-    )
+        raw_stage_2 = llm.generate(
+            prompt=critic_prompt,
+            max_new_tokens=512, 
+            temperature=temperature, 
+            top_p=top_p
+        )
 
-    critic_reflection = extract_section(raw_stage_2, "reflection")
-    if not critic_reflection: critic_reflection = raw_stage_2 
+        critic_reflection = extract_section(raw_stage_2, "reflection")
+        if not critic_reflection: critic_reflection = raw_stage_2 
 
-    # === STAGE 3: THE FINAL SOLVER ===
-    final_prompt = FINAL_SOLVER_PROMPT_TEMPLATE.format(
-        question=question,
-        context=context,
-        draft_reasoning=draft_reasoning,
-        draft_timeline=draft_timeline,
-        critic_reflection=critic_reflection
-    )
+        # === STAGE 3: THE FINAL SOLVER ===
+        final_prompt = FINAL_SOLVER_PROMPT_TEMPLATE.format(
+            question=question,
+            context=context,
+            draft_reasoning=draft_reasoning,
+            draft_timeline=draft_timeline,
+            critic_reflection=critic_reflection
+        )
+        
+        raw_stage_3 = generate_until_answer(
+            llm=llm,
+            prompt=final_prompt,
+            max_new_tokens=256,
+            temperature=temperature,
+            top_p=top_p,
+            max_retries=max_retries,
+            growth=2.0,
+            hard_cap=2048
+        )
+
+        final_answer_text = extract_answer(raw_stage_3)
+        adjustments_text = extract_section(raw_stage_3, "adjustments")
+
+        return {
+            "final_answer": final_answer_text,
+            "adjustments": adjustments_text,
+            "stage1_raw": raw_stage_1,
+            "stage2_raw": raw_stage_2,
+            "stage3_raw": raw_stage_3,
+        }
     
-    raw_stage_3 = generate_until_answer(
-        llm=llm,
-        prompt=final_prompt,
-        max_new_tokens=256,
-        temperature=temperature,
-        top_p=top_p,
-        max_retries=max_retries,
-        growth=2.0,
-        hard_cap=2048
-    )
+    else:  # pipeline_mode == "2-stage"
+        # === STAGE 2: THE CRITIC+SOLVER (2-stage mode) ===
+        critic_solver_prompt = CRITIC_SOLVER_PROMPT_TEMPLATE.format(
+            question=question,
+            context=context,
+            draft_reasoning=draft_reasoning,
+            draft_timeline=draft_timeline,
+            examples=examples_content
+        )
 
-    final_answer_text = extract_answer(raw_stage_3)
-    adjustments_text = extract_section(raw_stage_3, "adjustments")
+        # Use generate_until_answer since the Critic+Solver MUST output an <answer> tag
+        raw_stage_2 = generate_until_answer(
+            llm=llm,
+            prompt=critic_solver_prompt,
+            max_new_tokens=512,
+            temperature=temperature,
+            top_p=top_p,
+            max_retries=max_retries,
+            growth=2.0,
+            hard_cap=2048
+        )
 
-    return {
-        "final_answer": final_answer_text,
-        "adjustments": adjustments_text,
-        "stage1_raw": raw_stage_1,
-        "stage2_raw": raw_stage_2,
-        "stage3_raw": raw_stage_3,
-    }
+        # Extract components from the combined output
+        critic_reflection = extract_section(raw_stage_2, "reflection")
+        adjustments_text = extract_section(raw_stage_2, "adjustments")
+        final_answer_text = extract_answer(raw_stage_2)
+
+        return {
+            "final_answer": final_answer_text,
+            "adjustments": adjustments_text,
+            "stage1_raw": raw_stage_1,
+            "stage2_raw": raw_stage_2,
+            "stage3_raw": "N/A (Merged in Stage 2)",
+        }
 
 
 def build_model(mode: str = "dev", lora_path: Optional[str] = None) -> LLMWrapper:
@@ -220,6 +302,12 @@ def main():
     parser.add_argument("--tag", type=str, default=None)
     parser.add_argument("--temp", type=float, default=GEN_TEMPERATURE)
     parser.add_argument("--max-retries", type=int, default=2, help="Max retries for Stage 3 token expansion")
+    parser.add_argument("--pipeline-mode", type=str, default="3-stage", choices=["3-stage", "2-stage"], 
+                        help="Pipeline mode: '3-stage' (Actor->Critic->Solver) or '2-stage' (Actor->Critic+Solver)")
+    parser.add_argument("--use-few-shot", action='store_true', 
+                        help="Enable few-shot prompting for Critic/Solver to reduce Yes-Man bias")
+    parser.add_argument("--timeline-format", type=str, default="list", choices=["list", "table"],
+                        help="Timeline format: 'list' (bullet points) or 'table' (Markdown table)")
 
     args = parser.parse_args()
 
@@ -235,15 +323,32 @@ def main():
     print(f"[INFO] Initializing Unified Model (Actor+Critic)...")
     llm = build_model(mode=args.mode, lora_path=args.lora)
 
+    # Select timeline instruction based on format
+    timeline_instruction = TIMELINE_INSTRUCTION_TABLE if args.timeline_format == "table" else TIMELINE_INSTRUCTION_LIST
+
     csv_rows = []
     
     # Determine default tag if not provided
-    run_tag = args.tag if args.tag else ("ft_critic_loop" if args.lora else "base_critic_loop")
+    mode_suffix = "2stage" if args.pipeline_mode == "2-stage" else "3stage"
+    fewshot_suffix = "_fewshot" if args.use_few_shot else ""
+    format_suffix = "_table" if args.timeline_format == "table" else ""
+    
+    if args.tag:
+        run_tag = args.tag
+    else:
+        base_tag = f"ft_critic_loop_{mode_suffix}" if args.lora else f"base_critic_loop_{mode_suffix}"
+        run_tag = base_tag + fewshot_suffix + format_suffix
+
+    print(f"[INFO] Pipeline Mode: {args.pipeline_mode}")
+    print(f"[INFO] Few-Shot Prompting: {'ENABLED' if args.use_few_shot else 'DISABLED'}")
+    print(f"[INFO] Timeline Format: {args.timeline_format}")
+    print(f"[INFO] Run Tag: {run_tag}")
 
     for i, ex in enumerate(examples, start=1):
         print(f"\n--- [{i}/{len(examples)}] Processing qid={ex.question_id} ---")
 
         actor_prompt = TISER_PROMPT_TEMPLATE.format(
+                timeline_instruction=timeline_instruction,
                 question=ex.question,
                 context=ex.context
             )
@@ -256,7 +361,10 @@ def main():
             context=ex.context,
             temperature=args.temp,
             top_p=GEN_TOP_P,
-            max_retries=args.max_retries
+            max_retries=args.max_retries,
+            pipeline_mode=args.pipeline_mode,
+            use_few_shot=args.use_few_shot,
+            timeline_format=args.timeline_format
         )
         
         gold = ex.answer
@@ -271,7 +379,9 @@ def main():
             f"[STAGE 3: SOLVER] {result['stage3_raw']}"
         )
         
-        has_answer_tag = "<answer>" in result["stage3_raw"].lower()
+        # For 2-stage mode, answer tag is in stage2_raw; for 3-stage mode, it's in stage3_raw
+        answer_containing_stage = result['stage2_raw'] if args.pipeline_mode == "2-stage" else result['stage3_raw']
+        has_answer_tag = "<answer>" in answer_containing_stage.lower()
 
         csv_rows.append({
             "idx": i,
@@ -289,7 +399,7 @@ def main():
 
     print("\n[RESULTS SUMMARY]")
     for stat in stats_list:
-        print(f"  - {stat['dataset_name']:20s} | N={stat['n']:3d} | EM={stat['em']:.4f} | F1={stat['f1']:.4f}")
+        print(f"  - {stat['dataset_name']:20s} | N={stat['n']:3d} | EM={stat['em']:.4f} | F1={stat['f1']:.4f} | SM={stat['sm']:.4f}")
 
     # --- Save Detailed Logs (Flattened) ---
     out_csv = RESULTS_DIR / f"actor_critic_results_{run_tag}.csv"
@@ -311,7 +421,7 @@ def main():
 
     with summary_csv.open("w", encoding="utf-8", newline="") as f:
         # Matches the ablation script structure (minus 'variant', using 'tag' instead)
-        fieldnames = ["tag", "dataset_name", "n", "em", "f1"]
+        fieldnames = ["tag", "dataset_name", "n", "em", "f1", "sm"]
         w = csv.DictWriter(f, fieldnames=fieldnames)
         w.writeheader()
         
@@ -322,6 +432,7 @@ def main():
                 "n": stat["n"],
                 "em": f"{stat['em']:.4f}",
                 "f1": f"{stat['f1']:.4f}",
+                "sm": f"{stat['sm']:.4f}",
             })
 
 if __name__ == "__main__":

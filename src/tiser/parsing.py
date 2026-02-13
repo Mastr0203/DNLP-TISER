@@ -87,22 +87,23 @@ def extract_section(text: str, tag_name: str) -> str:
         return _clean_text_neutral(chunk)
 
     # --- CASE 3: Missing opening tag (...</tag>) ---
-    # This is critical. Instead of taking arbitrary chars, we look for
-    # the end of the previous block, identified by the '>' character.
+    # Use regex to find actual XML tags, not just any '>' character.
+    # This avoids false matches with mathematical symbols (e.g., "5 > 3") or arrows ("->").
     end_idx = lower.rfind(close_tag.lower())
     if end_idx != -1:
         before = text[:end_idx]
         
-        # Look for the last '>' before this block.
+        # Find all valid XML structure tags in 'before' using the regex
         # Example: "... </reasoning> CONTENT </timeline>"
-        # The last '>' belongs to </reasoning>.
-        last_bracket = before.rfind(">")
+        # We want to find the last tag (</reasoning>) and start content after it.
+        matches = list(_TAG_RE.finditer(before))
         
-        if last_bracket != -1:
-            chunk = before[last_bracket + 1:]
+        if matches:
+            # Content starts after the last valid tag found
+            last_match = matches[-1]
+            chunk = before[last_match.end():]
         else:
-            # If no '>' is found, it means we are at the start of the text
-            # (or the prompt had no tags). Take everything in 'before'.
+            # If no valid tags found, content starts at the beginning
             chunk = before
 
         return _clean_text_neutral(chunk)
