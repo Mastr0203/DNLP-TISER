@@ -221,3 +221,4 @@ tools/datasets/
 tools/translation/TISER_it.jsonl
 tools/translation/chunks_to_translate
 experiments
+tools/translation/check_metrics
