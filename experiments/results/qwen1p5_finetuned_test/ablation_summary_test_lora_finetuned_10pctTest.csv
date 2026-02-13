@@ -1,0 +1,8 @@
+tag,variant,dataset_name,n,em,f1
+test_lora_finetuned_10pctTest,all_stages,__OVERALL__,2096,0.7314,0.7971
+test_lora_finetuned_10pctTest,all_stages,tempreason_l2_test,530,0.8132,0.8564
+test_lora_finetuned_10pctTest,all_stages,tempreason_l3_test,417,0.8561,0.8861
+test_lora_finetuned_10pctTest,all_stages,tgqa_test,282,0.4716,0.7682
+test_lora_finetuned_10pctTest,all_stages,timeqa_easy_test,301,0.9402,0.9628
+test_lora_finetuned_10pctTest,all_stages,timeqa_hard_test,320,0.8812,0.9152
+test_lora_finetuned_10pctTest,all_stages,tot_semantic_test,246,0.1911,0.1951
