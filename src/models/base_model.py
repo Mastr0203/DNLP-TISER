@@ -1,5 +1,3 @@
-# src/models/base_model.py
-
 from __future__ import annotations
 
 from typing import Optional, Callable
@@ -8,13 +6,12 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
+# ==============================================================================
+# LLM WRAPPER
+# ==============================================================================
+
 class LLMWrapper:
-    """
-    Wrapper semplice per un modello HF causal LM, con supporto:
-    - modelli chat/instruct via tokenizer.chat_template (apply_chat_template)
-    - LoRA opzionale (PEFT) se lora_path è fornito
-    - device selection: cuda > mps > cpu
-    """
+    """Wrapper for a HuggingFace causal LM with chat template, optional LoRA, and device selection (cuda > mps > cpu)."""
 
     def __init__(
         self,
@@ -26,7 +23,6 @@ class LLMWrapper:
         self.model_name = model_name
         self.lora_path = lora_path
 
-        # === Selezione device: cuda > mps > cpu ===
         if device is None:
             if torch.cuda.is_available():
                 device = "cuda"
@@ -36,9 +32,6 @@ class LLMWrapper:
                 device = "cpu"
         self.device = device
 
-        # === Selezione dtype ===
-        # Nota: su MPS float16 può essere ok, ma bf16 spesso è più stabile dove supportato.
-        # Restiamo conservativi: fp16 su cuda/mps, fp32 su cpu.
         if dtype is None:
             if self.device in ("cuda", "mps"):
                 dtype = torch.float16
@@ -46,45 +39,31 @@ class LLMWrapper:
                 dtype = torch.float32
         self.dtype = dtype
 
-        # === Tokenizer ===
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-
-        # pad_token: necessario per generation
         if self.tokenizer.pad_token is None:
-            # per molti causal LM si usa eos come pad
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        # === Modello base ===
-        # device_map="auto" SOLO su CUDA (su MPS può fare mapping strani)
         model_kwargs = {}
         if self.device == "cuda":
             model_kwargs["device_map"] = "auto"
 
         try:
-            # transformers “nuovi” (come il tuo) preferiscono dtype=
             base_model = AutoModelForCausalLM.from_pretrained(
                 self.model_name,
                 dtype=self.dtype,
                 **({k: v for k, v in model_kwargs.items() if k != "torch_dtype"}),
             )
         except TypeError:
-            # fallback per transformers “vecchi”
             base_model = AutoModelForCausalLM.from_pretrained(
                 self.model_name,
                 torch_dtype=self.dtype,
                 **model_kwargs,
             )
-
-        # Se NON CUDA, spostiamo esplicitamente sul device
-        # (con CUDA+device_map auto spesso è già sharded)
         if self.device != "cuda":
             base_model.to(self.device)
 
-        # === Adapter LoRA opzionale ===
         if self.lora_path is not None:
-            # Import lazy: baseline non richiede peft installato
             from peft import PeftModel
-
             self.model = PeftModel.from_pretrained(base_model, self.lora_path)
         else:
             self.model = base_model
@@ -92,14 +71,7 @@ class LLMWrapper:
         self.model.eval()
 
     def _build_inputs(self, prompt: str) -> tuple[torch.Tensor, int]:
-        """
-        Costruisce input_ids e ritorna anche input_len (per tagliare l'output generato).
-
-        Se esiste una chat_template nel tokenizer, usa apply_chat_template con
-        add_generation_prompt=True (fondamentale per molti Instruct model).
-        Altrimenti fallback: tokenizzazione diretta del prompt.
-        """
-        # Chat-template path (Qwen Instruct, Mistral Instruct, ecc.)
+        """Build input_ids and return input length for trimming generated output. Uses chat template when available."""
         has_chat_template = (
             hasattr(self.tokenizer, "chat_template")
             and self.tokenizer.chat_template is not None
@@ -135,12 +107,7 @@ class LLMWrapper:
         top_p: float = 0.9,
         do_sample: Optional[bool] = None,
     ) -> str:
-        """
-        Genera testo a partire da un prompt.
-        Ritorna SOLO il testo generato (continuation), non include il prompt.
-
-        Nota: il parsing di <answer> lo fate a livello di pipeline TISER.
-        """
+        """Generate text from prompt. Returns only the continuation, not the prompt."""
         if do_sample is None:
             do_sample = temperature > 0.0
 
@@ -155,8 +122,6 @@ class LLMWrapper:
             pad_token_id=self.tokenizer.pad_token_id,
             eos_token_id=self.tokenizer.eos_token_id,
         )
-
-        # Taglia via il prompt: teniamo solo la continuation
         gen_only = generated_ids[0, input_len:]
         text = self.tokenizer.decode(gen_only, skip_special_tokens=True)
 
@@ -171,10 +136,7 @@ class LLMWrapper:
         temperature: float = 0.2,
         top_p: float = 0.9,
     ) -> str:
-        """
-        Variante comoda: genera output e poi applica una funzione
-        che estrae la parte desiderata (es. il contenuto di <answer>).
-        """
+        """Generate output and apply extractor to get the desired part (e.g. content of <answer>)."""
         text = self.generate(
             prompt=prompt,
             max_new_tokens=max_new_tokens,

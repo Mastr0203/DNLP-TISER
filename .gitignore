@@ -1,6 +1,3 @@
-<<<<<<< HEAD
-src/data/raw/
-=======
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -213,7 +210,12 @@ report/*.out
 report/*.synctex.gz
 report/*.toc
 
->>>>>>> origin/andrea-00
+# Project data (optional: uncomment to avoid committing large JSON)
+# data/raw/
+# data/processed/
+
+# Fine-tuned models (uncomment to avoid committing large LoRA weights)
+# finetuned_models/
 
 # .gitignore for Multilingual extension
 tools/translation/.translation_progress.json

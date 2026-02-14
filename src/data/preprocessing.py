@@ -1,19 +1,3 @@
-"""
-TISER Dataset Preprocessing Module
-
-This module implements hierarchical stratified sampling for creating reduced subsets
-of the TISER dataset while preserving statistical distributions at both the dataset
-level and context/story level.
-
-Key Features:
-- Hierarchical sampling: Dataset -> Context -> Samples
-- Context-aware grouping using dataset-specific parsing rules
-- Probabilistic "at-least-one" strategy for diversity preservation
-- Deterministic operation with configurable random seed
-- Schema-preserving I/O (handles train/test split differences)
-- JSONL format support (one JSON object per line)
-"""
-
 import json
 import re
 from collections import defaultdict
@@ -24,6 +8,10 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
+# ==============================================================================
+# CONTEXT EXTRACTION
+# ==============================================================================
 
 class ContextKeyExtractor:
     """
@@ -46,7 +34,6 @@ class ContextKeyExtractor:
         Returns:
             The extracted context key for grouping
         """
-        # Determine dataset type from dataset_name
         dataset_type = ContextKeyExtractor._get_dataset_type(dataset_name)
         
         if dataset_type == "tgqa":
@@ -58,7 +45,6 @@ class ContextKeyExtractor:
         elif dataset_type == "tot_semantic":
             return ContextKeyExtractor._extract_tot_semantic_context(question_id)
         else:
-            # Fallback: use the entire question_id as context
             logger.warning(f"Unknown dataset type for '{dataset_name}', using full question_id as context")
             return question_id
     
@@ -88,8 +74,6 @@ class ContextKeyExtractor:
         match = re.match(r"(story\d+)_", question_id)
         if match:
             return match.group(1)
-        
-        # Fallback: return a safe prefix
         logger.warning(f"Could not parse TGQA question_id: {question_id}")
         return f"tgqa_unknown_{question_id[:20]}"
     
@@ -103,8 +87,6 @@ class ContextKeyExtractor:
         match = re.match(r"/wiki/([^#]+)#", question_id)
         if match:
             return match.group(1)
-        
-        # Fallback: return a safe prefix
         logger.warning(f"Could not parse TimeQA question_id: {question_id}")
         return f"timeqa_unknown_{question_id[:20]}"
     
@@ -118,8 +100,6 @@ class ContextKeyExtractor:
         match = re.search(r"(Q\d+)", question_id)
         if match:
             return match.group(1)
-        
-        # Fallback: use the prefix before the first underscore or index
         parts = question_id.split("_")
         if len(parts) >= 2:
             return f"{parts[0]}_{parts[1]}"
@@ -137,14 +117,14 @@ class ContextKeyExtractor:
         Note: The question_id is already the context key itself.
         Empty strings are treated as a separate context.
         """
-        # The question_id IS the context - it's already a single number string
-        # We preserve the exact string representation to distinguish "9" from "09"
         if question_id == "":
             return "tot_semantic_empty"
-        
-        # Return the question_id as-is to preserve distinction between "0", "00", "9", "09", etc.
         return question_id
 
+
+# ==============================================================================
+# SAMPLING
+# ==============================================================================
 
 class HierarchicalSampler:
     """
@@ -180,8 +160,6 @@ class HierarchicalSampler:
         """
         sampled_data = []
         total_original = 0
-        
-        # Iterate through each dataset
         for dataset_name, contexts in hierarchical_data.items():
             dataset_samples, n_contexts_kept = self._sample_dataset(dataset_name, contexts)
             sampled_data.extend(dataset_samples)
@@ -238,24 +216,19 @@ class HierarchicalSampler:
         """
         n_samples = len(samples)
         target_n = int(n_samples * self.retention_ratio)
-        
-        # Probabilistic at-least-one: if target is 0 but we have samples,
-        # use the fractional part as probability to keep 1 sample
         if target_n == 0 and n_samples > 0:
             fractional_target = n_samples * self.retention_ratio
             if random.random() < fractional_target:
                 target_n = 1
-        
-        # If still 0, skip this context entirely
         if target_n == 0:
             return []
-        
-        # Ensure we don't sample more than available
         target_n = min(target_n, n_samples)
-        
-        # Random sampling without replacement
         return random.sample(samples, target_n)
 
+
+# ==============================================================================
+# PREPROCESSOR
+# ==============================================================================
 
 class TISERPreprocessor:
     """
@@ -282,8 +255,6 @@ class TISERPreprocessor:
         self.random_seed = random_seed
         self.context_extractor = ContextKeyExtractor()
         self.sampler = HierarchicalSampler(retention_ratio, random_seed)
-        
-        # Configure logging
         if verbose:
             root = logging.getLogger()
             if not root.handlers:
@@ -328,7 +299,6 @@ class TISERPreprocessor:
         Extracts temporal context from the prompt string and adds it as a field.
         """
         prompt = sample.get('prompt', '')
-        # Robust extraction logic matching what we used in tiser_dataset.py
         marker = "Temporal context:"
         
         if marker in prompt:
@@ -356,8 +326,6 @@ class TISERPreprocessor:
             Nested dict: {dataset_name: {context_key: [samples]}}
         """
         logger.info("Grouping data hierarchically...")
-        
-        # First, deduplicate exact duplicates using hash
         import hashlib
         seen_hashes = set()
         deduplicated_data = []
@@ -375,23 +343,14 @@ class TISERPreprocessor:
         
         if duplicates_removed > 0:
             logger.info(f"Removed {duplicates_removed} exact duplicate records")
-        
-        # Now group the deduplicated data
         hierarchical_data = defaultdict(lambda: defaultdict(list))
-        
         for sample in deduplicated_data:
             dataset_name = sample.get('dataset_name', 'unknown')
             question_id = sample.get('question_id', '')
-            
-            # Extract context key
             context_key = self.context_extractor.extract_context_key(
                 question_id, dataset_name
             )
-            
-            # Add to hierarchical structure
             hierarchical_data[dataset_name][context_key].append(sample)
-        
-        # Log statistics
         self._log_hierarchy_stats(hierarchical_data)
         
         return hierarchical_data
@@ -423,8 +382,6 @@ class TISERPreprocessor:
             output_path: Path to the output JSONL file
         """
         logger.info(f"Saving {len(data)} samples to {output_path}")
-        
-        # Create output directory if it doesn't exist
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
         with open(output_path, 'w', encoding='utf-8') as f:
@@ -454,23 +411,13 @@ class TISERPreprocessor:
         logger.info(f"Retention Ratio: {self.retention_ratio*100:.1f}%")
         logger.info(f"Random Seed: {self.random_seed}")
         logger.info("=" * 80 + "\n")
-        
-        # Step 1: Load
         data = self.load_data(input_path)
         original_count = len(data)
-        
-        # Step 2: Group hierarchically
         hierarchical_data = self.group_hierarchically(data)
-        
-        # Step 3: Sample
         logger.info("\nPerforming hierarchical stratified sampling...")
         sampled_data = self.sampler.sample(hierarchical_data)
         sampled_count = len(sampled_data)
-        
-        # Step 4: Validate
         self._validate_sample(data, sampled_data)
-        
-        # Step 5: Save
         self.save_data(sampled_data, output_path)
         
         logger.info("\n" + "=" * 80)
@@ -491,33 +438,22 @@ class TISERPreprocessor:
             sampled_data: Sampled subset
         """
         logger.info("\nValidating sampled data...")
-        
-        # Create unique identifiers using JSON serialization hash
-        # This handles cases where question_id alone is not unique
+
         def make_unique_id(sample):
-            # Create a stable hash from the entire sample
             import hashlib
-            # Sort keys to ensure consistent ordering
             sample_str = json.dumps(sample, sort_keys=True, ensure_ascii=False)
             return hashlib.sha256(sample_str.encode()).hexdigest()
-        
-        # Check that all samples are from the original data
         original_ids = {make_unique_id(sample) for sample in original_data}
         sampled_ids = {make_unique_id(sample) for sample in sampled_data}
         
         if not sampled_ids.issubset(original_ids):
             raise ValueError("Sampled data contains samples not in original data")
-        
-        # Check for duplicates in sampled data
         if len(sampled_ids) != len(sampled_data):
-            # Count actual duplicates for debugging
             from collections import Counter
             id_counter = Counter([make_unique_id(s) for s in sampled_data])
             duplicates = {k: v for k, v in id_counter.items() if v > 1}
             logger.error(f"Found {len(duplicates)} duplicate samples")
             raise ValueError("Sampled data contains duplicate samples")
-        
-        # Check dataset distribution
         original_dist = self._get_dataset_distribution(original_data)
         sampled_dist = self._get_dataset_distribution(sampled_data)
         
@@ -588,8 +524,11 @@ def preprocess_tiser_split(
     return preprocessor.process(Path(input_path), Path(output_path))
 
 
+# ==============================================================================
+# CLI
+# ==============================================================================
+
 if __name__ == "__main__":
-    # Example usage
     import sys
     
     if len(sys.argv) < 3:

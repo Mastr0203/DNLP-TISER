@@ -1,27 +1,15 @@
 """
-CLI Script for TISER Actor-Critic Inference Pipeline
-MODIFIED: Uniformed Format (Vertical Summary + Flattened Raw Output) + Dual-Mode Support + Few-Shot Prompting
+TISER Actor-Critic inference pipeline.
 
-- Supports both 3-stage (Actor -> Critic -> Solver) and 2-stage (Actor -> Critic+Solver) pipelines
-- Optional few-shot prompting for Critic/Solver to reduce "Yes-Man" bias
-- Flattened raw outputs for consistent CSV logging
-- Vertical summary format (Row per Dataset, plus __OVERALL__)
+Runs multi-stage inference: Actor (draft) -> Critic (reflection) -> Solver (final answer).
+Supports 3-stage (Actor, Critic, Solver) and 2-stage (Actor, Critic+Solver) modes,
+optional few-shot prompting for the Critic, and CSV logging with per-dataset metrics.
 
 Examples:
-    # 3-stage mode (default)
-    python scripts/run_actor_critic.py --test-file data/processed/TISER_test.json --tag base_run
-    
-    # 2-stage mode (more efficient)
-    python scripts/run_actor_critic.py --test-file data/processed/TISER_test.json --pipeline-mode 2-stage --tag base_2stage
-    
-    # 3-stage with few-shot prompting
-    python scripts/run_actor_critic.py --test-file data/processed/TISER_test.json --use-few-shot --tag base_3stage_fewshot
-    
-    # 2-stage with few-shot prompting
-    python scripts/run_actor_critic.py --test-file data/processed/TISER_test.json --pipeline-mode 2-stage --use-few-shot
-    
-    # With LoRA adapter
-    python scripts/run_actor_critic.py --test-file data/processed/TISER_test.json --lora checkpoints/tiser_lora_v1 --tag ft_run
+    python scripts/run_actor_critic.py --test-file data/processed/TISER_test_demo_10pct.json --tag base_run
+    python scripts/run_actor_critic.py --pipeline-mode 2-stage --tag base_2stage
+    python scripts/run_actor_critic.py --use-few-shot --tag base_fewshot
+    python scripts/run_actor_critic.py --lora models/qwen_finetuned --tag ft_run
 """
 
 import sys
@@ -32,27 +20,25 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import argparse
 import csv
 from pathlib import Path
-from typing import Optional, Tuple, Dict, List, Any
+from typing import Optional, Dict, List, Any
 from collections import defaultdict
 
 from src.config import (
-    PROCESSED_DIR,
     RESULTS_DIR,
-    GEN_MAX_NEW_TOKENS,
+    PROCESSED_DIR,
     GEN_TEMPERATURE,
     GEN_TOP_P,
     get_model_name,
 )
 from src.models.base_model import LLMWrapper
 from src.data.tiser_dataset import load_tiser_file
-from src.tiser.metrics import compute_em_f1, compute_metrics
-from src.tiser.parsing import extract_answer, extract_section
-from src.tiser.prompts import (
+from src.utils.metrics import compute_metrics
+from src.utils.parsing import extract_answer, extract_section
+from src.utils.prompts import (
     TISER_PROMPT_TEMPLATE,
     CRITIC_PROMPT_TEMPLATE,
     FINAL_SOLVER_PROMPT_TEMPLATE,
     CRITIC_SOLVER_PROMPT_TEMPLATE,
-    CRITIC_FEW_SHOT_EXAMPLES,
     CRITIC_FEW_SHOT_EXAMPLES_LIST,
     CRITIC_FEW_SHOT_EXAMPLES_TABLE,
     TIMELINE_INSTRUCTION_LIST,
@@ -70,14 +56,13 @@ def flatten_text(text: str) -> str:
 
 def compute_detailed_metrics(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    Computes EM, F1, and SM for each dataset AND an overall aggregate.
-    Returns a list of dictionaries ready for the summary CSV.
-    Matches the format of the ablation script.
+    Compute EM, F1, and SM per dataset plus an overall aggregate.
+    Returns a list of dicts suitable for the summary CSV.
     """
-    # 1. Group by dataset
+    # Group by dataset
     grouped = defaultdict(list)
     all_pairs = []
-    
+
     for r in rows:
         pair = (r["pred_answer"], r["gold_answer"])
         grouped[r["dataset_name"]].append(pair)
@@ -85,7 +70,7 @@ def compute_detailed_metrics(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]
 
     metrics_list = []
 
-    # 2. Calculate per-dataset metrics
+    # Calculate per-dataset metrics
     for ds_name, pairs in grouped.items():
         metrics = compute_metrics(pairs)
         metrics_list.append({
@@ -95,8 +80,8 @@ def compute_detailed_metrics(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]
             "f1": metrics["f1"],
             "sm": metrics["sm"]
         })
-    
-    # 3. Calculate Overall metrics (Micro-average)
+
+    # Calculate Overall metrics (Micro-average)
     if all_pairs:
         metrics = compute_metrics(all_pairs)
         metrics_list.append({
@@ -107,7 +92,7 @@ def compute_detailed_metrics(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]
             "sm": metrics["sm"]
         })
 
-    # Sort alphabetically
+    # Sort by dataset name
     metrics_list.sort(key=lambda x: x["dataset_name"])
     
     return metrics_list
@@ -183,7 +168,7 @@ def generate_with_actor_critic_loop(
     else:
         examples_content = ""
 
-    # === STAGE 1: THE ACTOR ===
+    # Stage 1: Actor produces draft reasoning and timeline
     raw_stage_1 = llm.generate(
         prompt=original_prompt,
         max_new_tokens=1024, 
@@ -198,7 +183,7 @@ def generate_with_actor_critic_loop(
     if not draft_timeline: draft_timeline = "Timeline tag missing in draft."
 
     if pipeline_mode == "3-stage":
-        # === STAGE 2: THE CRITIC (3-stage mode) ===
+        # Stage 2: Critic reviews draft and produces reflection
         critic_prompt = CRITIC_PROMPT_TEMPLATE.format(
             question=question,
             context=context,
@@ -217,7 +202,7 @@ def generate_with_actor_critic_loop(
         critic_reflection = extract_section(raw_stage_2, "reflection")
         if not critic_reflection: critic_reflection = raw_stage_2 
 
-        # === STAGE 3: THE FINAL SOLVER ===
+        # Stage 3: Solver produces final answer using draft and critic reflection
         final_prompt = FINAL_SOLVER_PROMPT_TEMPLATE.format(
             question=question,
             context=context,
@@ -248,8 +233,8 @@ def generate_with_actor_critic_loop(
             "stage3_raw": raw_stage_3,
         }
     
-    else:  # pipeline_mode == "2-stage"
-        # === STAGE 2: THE CRITIC+SOLVER (2-stage mode) ===
+    else:
+        # Stage 2 (2-stage mode): Critic and Solver combined in one step
         critic_solver_prompt = CRITIC_SOLVER_PROMPT_TEMPLATE.format(
             question=question,
             context=context,
@@ -269,7 +254,6 @@ def generate_with_actor_critic_loop(
             growth=2.0,
             hard_cap=2048
         )
-
         # Extract components from the combined output
         critic_reflection = extract_section(raw_stage_2, "reflection")
         adjustments_text = extract_section(raw_stage_2, "adjustments")
@@ -297,7 +281,8 @@ def main():
     parser = argparse.ArgumentParser(description="TISER Multi-Stage Inference (Actor-Critic Loop)")
     parser.add_argument("--mode", type=str, default="dev", choices=["dev", "train"])
     parser.add_argument("--lora", type=str, default=None, help="Path to LoRA adapter")
-    parser.add_argument("--test-file", type=str, required=True, help="Path to JSON/JSONL test file")
+    default_test = str(PROCESSED_DIR / "TISER_test_demo_10pct.json")
+    parser.add_argument("--test-file", type=str, default=default_test, help="Path to JSON/JSONL test file")
     parser.add_argument("--max-examples", type=int, default=None)
     parser.add_argument("--tag", type=str, default=None)
     parser.add_argument("--temp", type=float, default=GEN_TEMPERATURE)
@@ -327,7 +312,7 @@ def main():
     timeline_instruction = TIMELINE_INSTRUCTION_TABLE if args.timeline_format == "table" else TIMELINE_INSTRUCTION_LIST
 
     csv_rows = []
-    
+
     # Determine default tag if not provided
     mode_suffix = "2stage" if args.pipeline_mode == "2-stage" else "3stage"
     fewshot_suffix = "_fewshot" if args.use_few_shot else ""
@@ -378,7 +363,7 @@ def main():
             f"[STAGE 2: CRITIC] {result['stage2_raw']} "
             f"[STAGE 3: SOLVER] {result['stage3_raw']}"
         )
-        
+
         # For 2-stage mode, answer tag is in stage2_raw; for 3-stage mode, it's in stage3_raw
         answer_containing_stage = result['stage2_raw'] if args.pipeline_mode == "2-stage" else result['stage3_raw']
         has_answer_tag = "<answer>" in answer_containing_stage.lower()
@@ -390,18 +375,18 @@ def main():
             "question": ex.question,
             "gold_answer": gold,
             "pred_answer": pred_answer,
-            "raw_output": flatten_text(combined_raw_output), # FLATTENED HERE
+            "raw_output": flatten_text(combined_raw_output),
             "has_answer_tag": has_answer_tag
         })
 
-    # --- Metrics Computation (Aligned with Ablation Script) ---
+    # Metrics Computation (Aligned with Ablation Script)
     stats_list = compute_detailed_metrics(csv_rows)
 
     print("\n[RESULTS SUMMARY]")
     for stat in stats_list:
         print(f"  - {stat['dataset_name']:20s} | N={stat['n']:3d} | EM={stat['em']:.4f} | F1={stat['f1']:.4f} | SM={stat['sm']:.4f}")
 
-    # --- Save Detailed Logs (Flattened) ---
+    # Save Detailed Logs (Flattened)
     out_csv = RESULTS_DIR / f"actor_critic_results_{run_tag}.csv"
     print(f"\n[INFO] Saving logs to: {out_csv}")
     
@@ -415,12 +400,11 @@ def main():
         writer.writeheader()
         writer.writerows(csv_rows)
     
-    # --- Save Summary (Vertical Format) ---
+    # Save Summary (Vertical Format)
     summary_csv = RESULTS_DIR / f"actor_critic_summary_{run_tag}.csv"
     print(f"[INFO] Saving per-dataset summary to: {summary_csv}")
 
     with summary_csv.open("w", encoding="utf-8", newline="") as f:
-        # Matches the ablation script structure (minus 'variant', using 'tag' instead)
         fieldnames = ["tag", "dataset_name", "n", "em", "f1", "sm"]
         w = csv.DictWriter(f, fieldnames=fieldnames)
         w.writeheader()
