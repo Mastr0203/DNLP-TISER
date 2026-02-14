@@ -20,13 +20,11 @@ Pipeline for temporal reasoning over the TISER dataset: preprocessing, fine-tuni
 DNLP-TISER/
 ├── README.md
 ├── requirements.txt
-├── config (paths and models via src/config.py)
 ├── data/
 │   ├── raw/                    # Raw JSONL (e.g. TISER_train_demo.json, TISER_test_demo.json)
 │   └── processed/              # Sampled subsets (e.g. TISER_*_demo_10pct.json)
 ├── experiments/
 │   ├── results/                # CSV results from inference and actor-critic
-│   └── logs/
 ├── checkpoints/                # LoRA / model checkpoints (config references)
 ├── finetuned_models/           # Fine-tuned LoRA adapters (output of run_finetuning.py)
 ├── scripts/
