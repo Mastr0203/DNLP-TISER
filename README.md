@@ -190,7 +190,7 @@ python scripts/run_actor_critic.py --use-few-shot --tag base_fewshot
 
 # With LoRA adapter (e.g. from finetuned_models/)
 python scripts/run_actor_critic.py \
-  --lora finetuned_models/qwen_finetuned \
+  --lora finetuned_models/qwen_finetuned_en \
   --tag ft_run
 ```
 

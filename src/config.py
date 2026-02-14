@@ -28,7 +28,7 @@ CHECKPOINTS_TRAINING_LORA = CHECKPOINTS_DIR / "training_lora"
 # ==============================================================================
 
 DEV_MODEL_NAME = "Qwen/Qwen2.5-1.5B-Instruct"
-TRAIN_MODEL_NAME_EN = "Qwen/Qwen2.5-7B-Instruct"
+TRAIN_MODEL_NAME_EN = "Qwen/Qwen2.5-1.5B-Instruct"
 TRAIN_MODEL_NAME_IT = TRAIN_MODEL_NAME_EN
 CRITIC_MODEL_NAME_EN = TRAIN_MODEL_NAME_EN
 
