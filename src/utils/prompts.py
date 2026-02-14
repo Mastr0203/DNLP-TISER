@@ -496,8 +496,8 @@ Formato della risposta:
 [La tua risposta finale.]
 </answer>
 
-Domanda: {question}
-Contesto temporale: {context}"""
+Question: {question}
+Temporal context: {context}"""
 
 
 # -----------------------------------------------------------------------------
@@ -507,16 +507,16 @@ Contesto temporale: {context}"""
 TISER_PROMPT_TEMPLATE_IT = """Sei un assistente AI che utilizza un approccio di Chain of Thought (CoT) con riflessione per rispondere alle domande.
 
 Segui questi passaggi:
-1. Ragiona sul problema passo dopo passo all'interno dei tag <reasoning>.
-2. Sulla base del ragionamento precedente, identifica gli eventi temporali rilevanti nel contesto fornito per rispondere alla domanda all'interno dei tag <timeline>. Assumi che le relazioni nel contesto siano unidirezionali.
-3. Rifletti sul tuo ragionamento e sulla timeline per verificare eventuali errori o possibili miglioramenti all'interno dei tag <reflection>.
-4. Apporta le modifiche necessarie in base alla riflessione. Se è richiesto ulteriore ragionamento, torna al passaggio 1; altrimenti, passa al passaggio successivo.
-5. Fornisci la tua risposta finale e concisa all'interno dei tag <answer>. Se la risposta è un numero, riporta solo il numero, senza nient'altro. In caso contrario, riporta l'entità o l'evento senza alcun commento aggiuntivo.
+Passaggio 1. Ragiona sul problema passo dopo passo all'interno dei tag <reasoning>.
+Passaggio 2. Sulla base del ragionamento precedente, identifica gli eventi temporali rilevanti nel contesto fornito per rispondere alla domanda all'interno dei tag <timeline>. Assumi che le relazioni nel contesto siano unidirezionali.
+Passaggio 3. Rifletti sul tuo ragionamento e sulla timeline per verificare eventuali errori o possibili miglioramenti all'interno dei tag <reflection>.
+Passaggio 4. Apporta le modifiche necessarie in base alla riflessione. Se è richiesto ulteriore ragionamento, torna al passaggio 1; altrimenti, passa al passaggio successivo.
+Passaggio 5. Fornisci la tua risposta finale e concisa all'interno dei tag <answer>. Se la risposta è un numero, riporta solo il numero, senza nient'altro. In caso contrario, riporta l'entità o l'evento senza alcun commento aggiuntivo.
 
 Istruzioni aggiuntive:
-• Le sezioni <reasoning>, <timeline> e <reflection> sono destinate esclusivamente al ragionamento interno.
-• Non utilizzare enumerazioni o liste durante la scrittura; usa testo semplice sotto forma di paragrafi.
-• La risposta alla domanda deve essere interamente contenuta all'interno dei tag <answer>.
+Le sezioni <reasoning>, <timeline> e <reflection> sono destinate esclusivamente al ragionamento interno.
+Non utilizzare enumerazioni o liste durante la scrittura; usa testo semplice sotto forma di paragrafi.
+La risposta alla domanda deve essere interamente contenuta all'interno dei tag <answer>.
 
 Formato della risposta:
 <reasoning>
@@ -533,5 +533,5 @@ Formato della risposta:
 [Risposta finale.]
 </answer>
 
-Domanda: {question}
-Contesto temporale: {context}"""
+Question: {question}
+Temporal context: {context}"""

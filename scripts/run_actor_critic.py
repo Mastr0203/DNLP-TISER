@@ -32,27 +32,24 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import argparse
 import csv
 from pathlib import Path
-from typing import Optional, Tuple, Dict, List, Any
+from typing import Optional, Dict, List, Any
 from collections import defaultdict
 
 from src.config import (
-    PROCESSED_DIR,
     RESULTS_DIR,
-    GEN_MAX_NEW_TOKENS,
     GEN_TEMPERATURE,
     GEN_TOP_P,
     get_model_name,
 )
 from src.models.base_model import LLMWrapper
 from src.data.tiser_dataset import load_tiser_file
-from src.tiser.metrics import compute_em_f1, compute_metrics
-from src.tiser.parsing import extract_answer, extract_section
-from src.tiser.prompts import (
+from src.utils.metrics import compute_metrics
+from src.utils.parsing import extract_answer, extract_section
+from src.utils.prompts import (
     TISER_PROMPT_TEMPLATE,
     CRITIC_PROMPT_TEMPLATE,
     FINAL_SOLVER_PROMPT_TEMPLATE,
     CRITIC_SOLVER_PROMPT_TEMPLATE,
-    CRITIC_FEW_SHOT_EXAMPLES,
     CRITIC_FEW_SHOT_EXAMPLES_LIST,
     CRITIC_FEW_SHOT_EXAMPLES_TABLE,
     TIMELINE_INSTRUCTION_LIST,
