@@ -1,21 +1,14 @@
 #!/usr/bin/env python
-# scripts/run_ablation_single_en.py
 """
-CLI Script for TISER Prompt Ablation Study (Single-Prompt Only)
-MODIFIED: Vertical Summary Format (Row per Dataset per Variant) + Flattened Raw Output
-MODIFIED: Added --lora-path support for Fine-Tuned models
+TISER prompt ablation runner (single-prompt inference).
 
-NEW MODS (to fix your case):
-- Much safer generation stopping criterion: accept <answer> OR </answer> (not only </answer>)
-- Optional evaluation on RAW output with a lightweight fallback extractor (keeps extract_answer() unchanged)
-- Incremental saving + --resume (so you don’t lose 10h runs on OOM / crash)
-- OOM-safe loop: catches CUDA OOM, clears cache, logs and continues
+Runs multiple prompt variants over the same test set with one model.
+Supports incremental CSV saving, --resume, optional --eval-on-raw, and OOM recovery.
 
-- Same LLM for all variants
-- Computes EM & F1 per dataset
-- Saves per-variant CSV logs (flattened)
-- Saves ONE summary CSV with vertical structure:
-  [tag, variant, dataset_name, n, em, f1]
+Examples:
+    python scripts/run_inference.py --test-file data/processed/TISER_test_demo_10pct.json --tag ablation
+    python scripts/run_inference.py --resume --save-every 50
+    python scripts/run_inference.py --eval-on-raw --lora-path models/qwen_finetuned
 """
 
 import sys
@@ -33,6 +26,7 @@ import torch
 
 from src.config import (
     RESULTS_DIR,
+    PROCESSED_DIR,
     GEN_TEMPERATURE,
     GEN_TOP_P,
     get_model_name,
@@ -41,10 +35,6 @@ from src.models.base_model import LLMWrapper
 from src.data.tiser_dataset import load_tiser_file
 from src.utils.metrics import compute_em_f1
 from src.utils.parsing import extract_answer
-
-# ----------------------------------------------------------------------
-# IMPORT PROMPT VARIABLES
-# ----------------------------------------------------------------------
 from src.utils.prompts import (
     STANDARD_PROMPT_TEMPLATE,
     ABLATION_ONLY_REASONING_PROMPT_TEMPLATE,
@@ -67,9 +57,9 @@ VARIANT_PROMPTS: Dict[str, str] = {
     "all_stages": TISER_PROMPT_TEMPLATE
 }
 
-# ======================================================================
+# ==============================================================================
 # UTILITIES
-# ======================================================================
+# ==============================================================================
 
 def flatten_text(text: str) -> str:
     """Flatten newlines for single-line CSV logging."""
@@ -82,8 +72,7 @@ def normalize_text(s: str) -> str:
 
 def fallback_extract_from_raw(raw: str) -> str:
     """
-    Lightweight fallback extractor for Temporal QA style outputs.
-    NOTE: We do NOT modify extract_answer(). This is only used optionally.
+    Lightweight fallback extractor for temporal QA outputs when tag-based extraction fails.
     """
     raw = normalize_text(raw)
     if not raw:
@@ -91,17 +80,14 @@ def fallback_extract_from_raw(raw: str) -> str:
 
     low = raw.lower()
 
-    # 1) True/False (EN + IT)
     for token in ["true", "false", "vero", "falso"]:
         if re.search(rf"\b{token}\b", low):
             return token.capitalize()
 
-    # 2) Last number in the output
     nums = re.findall(r"[-+]?\d+(?:[\.,]\d+)?", raw)
     if nums:
         return nums[-1].replace(",", ".")
 
-    # 3) Try tail after common separators
     separators = ["<answer>", "answer:", "risposta:", "finale:", "=>", "->"]
     for sep in separators:
         if sep in low:
@@ -112,17 +98,12 @@ def fallback_extract_from_raw(raw: str) -> str:
             if tail:
                 return tail
 
-    # 4) Last sentence
     parts = re.split(r"(?<=[\.\?\!])\s+", raw)
     parts = [p.strip() for p in parts if p.strip()]
     return parts[-1] if parts else raw
 
 def extract_answer_rawfirst(raw: str) -> str:
-    """
-    Hybrid extractor:
-    - try extract_answer(raw) (tag-based / heuristics already in repo)
-    - if empty, fallback_extract_from_raw(raw)
-    """
+    """Try tag-based extract_answer; if empty, use fallback_extract_from_raw."""
     raw = raw or ""
     a = normalize_text(extract_answer(raw))
     if a:
@@ -133,9 +114,7 @@ def compute_detailed_metrics_from_pairs(
     pairs_by_dataset: Dict[str, List[Tuple[str, str]]],
     all_pairs: List[Tuple[str, str]],
 ) -> List[Dict[str, Any]]:
-    """
-    Computes EM/F1 per dataset + overall (micro).
-    """
+    """Compute EM and F1 per dataset plus overall (micro)."""
     metrics_list: List[Dict[str, Any]] = []
 
     for ds_name, pairs in pairs_by_dataset.items():
@@ -159,9 +138,9 @@ def compute_detailed_metrics_from_pairs(
     metrics_list.sort(key=lambda x: x["dataset_name"])
     return metrics_list
 
-# ======================================================================
+# ==============================================================================
 # GENERATION HELPERS
-# ======================================================================
+# ==============================================================================
 
 def generate_until_answer(
     llm: LLMWrapper,
@@ -173,10 +152,7 @@ def generate_until_answer(
     growth: float = 2.0,
     hard_cap: int = 1024,
 ) -> str:
-    """
-    Safer stopping:
-    - accept <answer> OR </answer> to stop retrying (your FT often misses the closing tag)
-    """
+    """Generate until <answer> or </answer> is present; retry with more tokens if missing."""
     cur = max_new_tokens
     out = llm.generate(prompt=prompt, max_new_tokens=cur, temperature=temperature, top_p=top_p)
 
@@ -193,9 +169,9 @@ def generate_until_answer(
 
     return out
 
-# ======================================================================
+# ==============================================================================
 # MODEL
-# ======================================================================
+# ==============================================================================
 
 def build_model(mode: str = "dev", lang: str = "en", lora_path: Optional[str] = None) -> LLMWrapper:
     model_name = get_model_name(mode=mode, lang=lang, role="actor")
@@ -207,14 +183,12 @@ def build_model(mode: str = "dev", lang: str = "en", lora_path: Optional[str] = 
     else:
         return LLMWrapper(model_name=model_name)
 
-# ======================================================================
+# ==============================================================================
 # RESUME HELPERS
-# ======================================================================
+# ==============================================================================
 
 def load_done_question_ids(csv_path: Path) -> set:
-    """
-    For --resume: reads existing CSV and returns question_ids already processed.
-    """
+    """For --resume: return set of question_ids already present in the CSV."""
     if not csv_path.exists():
         return set()
     done = set()
@@ -225,7 +199,7 @@ def load_done_question_ids(csv_path: Path) -> set:
             for qid in df["question_id"].fillna("").astype(str).tolist():
                 done.add(qid)
     except Exception:
-        # If pandas not available or CSV is partial/corrupted, fall back to csv module
+         # If pandas not available or CSV is partial/corrupted, fall back to csv module
         with csv_path.open("r", encoding="utf-8", newline="") as f:
             r = csv.DictReader(f)
             for row in r:
@@ -234,34 +208,31 @@ def load_done_question_ids(csv_path: Path) -> set:
     return done
 
 def ensure_csv_writer(csv_path: Path, fieldnames: List[str]) -> csv.DictWriter:
-    """
-    Opens CSV in append mode, writes header only if file is new/empty.
-    Returns a DictWriter. Caller should keep the file handle open.
-    """
-    # handled in caller: open file handle and pass it to DictWriter
-    raise NotImplementedError  # (kept as a placeholder for clarity)
+    """Placeholder: caller opens file and creates DictWriter."""
+    raise NotImplementedError
 
-# ======================================================================
+# ==============================================================================
 # MAIN
-# ======================================================================
+# ==============================================================================
 
 DEFAULT_VARIANTS = ["standard", "only_reasoning", "only_timeline", "no_reflection", "no_timeline", "no_reasoning", "all_stages"]
 
 def main():
+    default_test = str(PROCESSED_DIR / "TISER_test_demo_10pct.json")
     parser = argparse.ArgumentParser(description="TISER Ablation Runner (Vertical Summary)")
     parser.add_argument("--mode", type=str, default="dev", choices=["dev", "train"])
-    parser.add_argument("--test-file", type=str, required=True, help="Path to JSON/JSONL test file")
+    parser.add_argument("--test-file", type=str, default=default_test, help="Path to JSON/JSONL test file")
     parser.add_argument("--max-examples", type=int, default=None)
     parser.add_argument("--tag", type=str, default="ablation")
     parser.add_argument("--temp", type=float, default=GEN_TEMPERATURE)
     parser.add_argument("--top-p", type=float, default=GEN_TOP_P)
 
-    # generation controls
+    # Generation parameters
     parser.add_argument("--max-new-tokens", type=int, default=256)
     parser.add_argument("--max-retries", type=int, default=2)
     parser.add_argument("--hard-cap", type=int, default=1024)
 
-    # evaluation mode
+    # Evaluation parameters
     parser.add_argument(
         "--eval-on-raw",
         action="store_true",
@@ -269,7 +240,7 @@ def main():
              "CSV still stores both pred_answer and pred_from_raw."
     )
 
-    # saving / resume
+    # CSV saving and resume parameters
     parser.add_argument("--save-every", type=int, default=50, help="Append rows to CSV every N examples.")
     parser.add_argument("--resume", action="store_true", help="Resume from existing per-variant CSV (skip done question_ids).")
 
@@ -301,7 +272,6 @@ def main():
     print(f"[INFO] Initializing model (mode={args.mode})")
     llm = build_model(mode=args.mode, lang=args.lang, lora_path=args.lora_path)
 
-    # global summary rows (written at end)
     global_summary_rows: List[Dict[str, Any]] = []
 
     for variant in variants:
@@ -314,7 +284,7 @@ def main():
         out_csv = RESULTS_DIR / f"ablation_{args.tag}_{variant}.csv"
         summary_csv = RESULTS_DIR / f"ablation_summary_{args.tag}.csv"
 
-        # Resume support
+        # For --resume: return set of question_ids already present in the CSV
         done_qids = set()
         if args.resume:
             done_qids = load_done_question_ids(out_csv)
@@ -329,7 +299,6 @@ def main():
             "oom"
         ]
 
-        # Open CSV in append mode (write header only if new)
         out_csv.parent.mkdir(parents=True, exist_ok=True)
         file_exists = out_csv.exists() and out_csv.stat().st_size > 0
         f_out = out_csv.open("a", encoding="utf-8", newline="")
@@ -341,12 +310,10 @@ def main():
         pairs_by_dataset: Dict[str, List[Tuple[str, str]]] = defaultdict(list)
         all_pairs: List[Tuple[str, str]] = []
 
-        # If resuming, we need to rebuild metric pairs from existing CSV so final metrics are correct
         if args.resume and file_exists:
             try:
                 import pandas as pd
                 df_prev = pd.read_csv(out_csv)
-                # choose eval key based on flag
                 pred_col = "pred_from_raw" if args.eval_on_raw else "pred_answer"
                 if pred_col in df_prev.columns and "gold_answer" in df_prev.columns and "dataset_name" in df_prev.columns:
                     for _, row in df_prev.iterrows():
@@ -356,7 +323,7 @@ def main():
                         pairs_by_dataset[ds].append((pred, gold))
                         all_pairs.append((pred, gold))
             except Exception:
-                pass  # if reading fails, we still proceed; metrics will reflect only new part
+                pass
 
         buffer_rows: List[Dict[str, Any]] = []
         processed_now = 0
@@ -395,16 +362,10 @@ def main():
 
             pred_answer = extract_answer(raw)
             pred_from_raw = extract_answer_rawfirst(raw)
-
-            # has_answer_tag means: the <answer> tag-based extractor found something
-            has_answer_tag = False if (pred_answer or "").strip() == "" else True
-
+            has_answer_tag = bool((pred_answer or "").strip())
             gold = ex.answer
-
-            # choose which prediction to use for metrics
             pred_for_metrics = pred_from_raw if args.eval_on_raw else pred_answer
 
-            # store row
             row = {
                 "idx": i,
                 "variant": variant,
@@ -419,26 +380,18 @@ def main():
                 "oom": oom_flag,
             }
             buffer_rows.append(row)
-
-            # update metric accumulators
             pairs_by_dataset[ex.dataset_name].append((pred_for_metrics, gold))
             all_pairs.append((pred_for_metrics, gold))
 
             processed_now += 1
-
-            # incremental flush
             if processed_now % args.save_every == 0:
                 writer.writerows(buffer_rows)
                 f_out.flush()
                 buffer_rows = []
-
-        # final flush for the variant
         if buffer_rows:
             writer.writerows(buffer_rows)
             f_out.flush()
         f_out.close()
-
-        # --- Compute Metrics (Dataset-wise + Overall) ---
         stats_list = compute_detailed_metrics_from_pairs(pairs_by_dataset, all_pairs)
 
         print(f"[METRICS] Summary for {variant} (eval_on_raw={args.eval_on_raw}):")
@@ -452,8 +405,6 @@ def main():
                 "em": f"{stat['em']:.4f}",
                 "f1": f"{stat['f1']:.4f}",
             })
-
-    # --- Save Global Summary CSV ---
     summary_csv = RESULTS_DIR / f"ablation_summary_{args.tag}.csv"
     print(f"\n[INFO] Saving global vertical summary -> {summary_csv}")
 

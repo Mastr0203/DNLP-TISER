@@ -1,18 +1,11 @@
-# =============================================================================
+# ==============================================================================
 # PROMPT TEMPLATES
-# =============================================================================
-
-# -----------------------------------------------------------------------------
-# Timeline Instruction Constants
-# -----------------------------------------------------------------------------
+# ==============================================================================
 
 TIMELINE_INSTRUCTION_LIST = "Identify relevant temporal events in the given context for answering the given question within <timeline> tags."
 
 TIMELINE_INSTRUCTION_TABLE = "Identify relevant temporal events and format them as a Markdown table with columns | Date | Event | within <timeline> tags."
 
-# -----------------------------------------------------------------------------
-# Few-Shot Examples for Critic (reduces Yes-Man bias)
-# -----------------------------------------------------------------------------
 
 CRITIC_FEW_SHOT_EXAMPLES_LIST = """
 Here are examples of how you should critique and correct the reasoning:
@@ -55,10 +48,7 @@ Using the context date (April 1912). Duration is from March 1910 to April 1912, 
 </answer>
 """
 
-# Backward compatibility: CRITIC_FEW_SHOT_EXAMPLES points to LIST version by default
 CRITIC_FEW_SHOT_EXAMPLES = CRITIC_FEW_SHOT_EXAMPLES_LIST
-
-# Table-format Few-Shot Examples
 CRITIC_FEW_SHOT_EXAMPLES_TABLE = """
 Here are examples of how you should critique and correct the reasoning:
 
@@ -104,10 +94,6 @@ Using the context date (April 1912). Duration is from March 1910 to April 1912, 
 </answer>
 """
 
-# -----------------------------------------------------------------------------
-# Standard Prompt: No reasoning / timeline / reflection (baseline)
-# -----------------------------------------------------------------------------
-
 STANDARD_PROMPT_TEMPLATE = """You are an AI assistant that answers questions strictly using the provided temporal context.
 Provide your final, concise answer within the <answer> tags.
 If the answer is a number, output only the number, nothing else. Otherwise, output the entity or event without any additional comments.
@@ -123,10 +109,6 @@ Response Format:
 
 Question: {question}
 Temporal Context: {context}"""
-
-# -----------------------------------------------------------------------------
-# FULL: All stages (Reasoning -> Timeline -> Reflection -> Answer)
-# -----------------------------------------------------------------------------
 
 TISER_PROMPT_TEMPLATE = """You are an AI assistant that uses a Chain of Thought (CoT) approach with reflection to answer queries.
 
@@ -160,20 +142,12 @@ Response Format:
 Question: {question}
 Temporal Context: {context}"""
 
-# -----------------------------------------------------------------------------
-# Minimal / Finetuned Actor Prompt
-# -----------------------------------------------------------------------------
-
 ACTOR_FINETUNED_TEMPLATE = """You are an AI assistant that has to respond to questions given a context
 
 Question: {question}
 
 Temporal Context: {context}"""
 
-
-# -----------------------------------------------------------------------------
-# Multi-Stage Pipeline Prompts (Actor -> Critic -> Solver)
-# -----------------------------------------------------------------------------
 
 CRITIC_PROMPT_TEMPLATE = """You are an AI Critic responsible for the evaluation phase of a Chain of Thought process.
 Your task is to analyze the provided <reasoning> and <timeline> to identify errors, inconsistencies, or logical flaws based *strictly* on the provided <context>.

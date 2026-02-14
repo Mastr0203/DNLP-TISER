@@ -1,18 +1,3 @@
-"""
-TISER Dataset Loader and PyTorch Dataset Classes
-
-This module provides utilities for loading and handling the TISER
-(Temporal Information Semantic Extraction and Reasoning) dataset in various formats.
-
-Key Features:
-- JSONL file format support with robust parsing
-- Dataclass-based example representation
-- Filtering by dataset type
-- PyTorch Dataset integration
-- Automatic chat template formatting for LLMs
-- Comprehensive error handling and validation
-"""
-
 from __future__ import annotations
 
 import json
@@ -25,6 +10,10 @@ from torch.utils.data import Dataset
 
 logger = logging.getLogger(__name__)
 
+
+# ==============================================================================
+# DATA STRUCTURES
+# ==============================================================================
 
 @dataclass
 class TiserExample:
@@ -106,6 +95,10 @@ class TiserExample:
         )
 
 
+# ==============================================================================
+# LOADER
+# ==============================================================================
+
 class TiserFileLoader:
     """
     Handles loading and parsing of TISER dataset files.
@@ -151,14 +144,8 @@ class TiserFileLoader:
         
         if verbose:
             logger.info(f"Loading TISER data from {path}")
-        
-        # Parse dataset filter
         dataset_filter_set = set(dataset_filter) if dataset_filter is not None else None
-        
-        # Load raw data from JSONL
         raw_data = TiserFileLoader._load_jsonl(path, skip_invalid, verbose)
-        
-        # Convert to TiserExample objects with filtering
         examples = TiserFileLoader._convert_to_examples(
             raw_data,
             dataset_filter_set,
@@ -183,7 +170,6 @@ class TiserFileLoader:
         Load JSONL (one JSON object per line) OR a JSON list (single JSON array).
         Auto-detects by looking at the first non-whitespace character.
         """
-        # Peek first non-whitespace char
         with path.open("r", encoding="utf-8") as f:
             start = f.read(4096)
 
@@ -193,18 +179,15 @@ class TiserFileLoader:
                 first_non_ws = ch
                 break
 
-        # Case A: JSON list
         if first_non_ws == "[":
             try:
                 obj = json.loads(start + path.open("r", encoding="utf-8").read()[4096:])
             except Exception:
-                # fallback: simpler, just json.load
                 with path.open("r", encoding="utf-8") as f:
                     obj = json.load(f)
 
             if not isinstance(obj, list):
                 raise ValueError(f"{path} looks like JSON list but is not a list at top-level.")
-            # ensure dicts
             out = []
             for i, item in enumerate(obj):
                 if isinstance(item, dict):
@@ -215,7 +198,6 @@ class TiserFileLoader:
                 logger.info(f"Loaded {len(out)} examples from JSON list file: {path.name}")
             return out
 
-        # Case B: JSONL (current behavior)
         data: List[Dict[str, Any]] = []
         invalid_count = 0
 
@@ -262,18 +244,12 @@ class TiserFileLoader:
         filtered_count = 0
         
         for raw in raw_data:
-            # Create example
             example = TiserFileLoader._parse_example(raw)
-            
-            # Apply dataset filter
             if dataset_filter_set is not None:
                 if example.dataset_name not in dataset_filter_set:
                     filtered_count += 1
                     continue
-            
             examples.append(example)
-            
-            # Check max examples limit
             if max_examples is not None and len(examples) >= max_examples:
                 break
         
@@ -294,18 +270,13 @@ class TiserFileLoader:
             TiserExample object
         """
         prompt = raw.get('prompt', '')
-        context_text = raw.get('context', '') # First, check if it exists explicitly
-        
-        # --- LOGIC EXTRACTION CONTEXT ---
+        context_text = raw.get('context', '')
         if not context_text and prompt:
-            # Marker identified in the prompt structure
             marker = "Temporal context:"
             if marker in prompt:
-                # Extract everything after the marker
                 try:
                     context_text = prompt.split(marker)[-1].strip()
                 except Exception:
-                    # In case of splitting errors (rare), leave empty
                     pass
 
         return TiserExample(
@@ -315,7 +286,7 @@ class TiserFileLoader:
             context=context_text,
             answer=raw.get('answer', ''),
             prompt=raw.get('prompt', ''),
-            output=raw.get('output'),  # May be None for test data
+            output=raw.get('output'),
         )
     
     @staticmethod
@@ -332,6 +303,10 @@ class TiserFileLoader:
             logger.info(f"{dataset_name:<40} {count:>6} ({percentage:>5.1f}%)")
         logger.info("-" * 60)
 
+
+# ==============================================================================
+# PYTORCH DATASET
+# ==============================================================================
 
 class TiserDataset(Dataset):
     """
@@ -375,8 +350,6 @@ class TiserDataset(Dataset):
         """
         self.examples = examples
         self.tokenizer = tokenizer
-        
-        # Validate examples if required
         if validate_training:
             self._validate_examples()
         
@@ -420,40 +393,20 @@ class TiserDataset(Dataset):
             ValueError: If the example lacks output field
         """
         example = self.examples[idx]
-        
-        # Safety check for training examples
         if not example.is_training_example():
             raise ValueError(
                 f"Example {example.question_id} lacks output field. "
                 f"Cannot be used for training."
             )
-        
-        # Build chat messages in the format expected by chat templates
         messages = [
             {"role": "user", "content": example.prompt},
             {"role": "assistant", "content": example.output}
         ]
-        
-        # Apply the tokenizer's chat template without tokenizing
-        # This produces a formatted string ready for the model
         formatted_text = self.tokenizer.apply_chat_template(
             messages,
             tokenize=False,
             add_generation_prompt=False
         )
-
-        # Use this alternative formatting if the tokenizer lacks chat template support
-        # and eliminate the above block.
-        """if hasattr(self.tokenizer, "apply_chat_template"):
-            formatted_text = self.tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=False
-            )
-            else:
-                formatted_text = f"{example.prompt}\n{example.output}"
-                """
-        
         return {"text": formatted_text}
     
     def get_example_metadata(self, idx: int) -> Dict[str, str]:
@@ -476,7 +429,10 @@ class TiserDataset(Dataset):
         }
 
 
-# Convenience function that maintains backward compatibility
+# ==============================================================================
+# CONVENIENCE API
+# ==============================================================================
+
 def load_tiser_file(
     path: Path | str,
     max_examples: Optional[int] = None,

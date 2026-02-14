@@ -1,5 +1,3 @@
-# src/tiser/metrics.py
-
 from __future__ import annotations
 
 import re
@@ -12,18 +10,12 @@ from collections import Counter
 # TEXT NORMALIZATION & EXTRACTION UTILITIES
 # ==============================================================================
 
-# Stopwords to remove (English + Italian articles and common connecting words)
 STOPWORDS = {
-    # English articles
     "the", "a", "an",
-    # Italian articles
     "il", "lo", "la", "i", "gli", "le", "un", "uno", "una",
-    # Common prepositions and conjunctions (English)
     "of", "in", "on", "at", "to", "for", "with", "from", "by",
     "and", "or", "but",
-    # Common prepositions (Italian)
     "di", "da", "in", "con", "su", "per", "tra", "fra", "e", "ed",
-    # Other common words
     "between", "among",
 }
 
@@ -50,28 +42,16 @@ def _normalize_for_soft_match(text: str) -> str:
     """
     if not text:
         return ""
-    
-    # Lowercase
     text = text.lower().strip()
-    
-    # Convert hyphens to spaces first (before other punctuation removal)
     text = text.replace('-', ' ')
-    
-    # Remove punctuation, BUT preserve periods within numbers (e.g., "2.5")
-    # Strategy: Replace punctuation, but keep digits and spaces
     cleaned = []
     for i, char in enumerate(text):
         if char.isalnum() or char.isspace():
             cleaned.append(char)
         elif char == '.' and i > 0 and i < len(text) - 1:
-            # Keep period if it's between digits
             if text[i-1].isdigit() and text[i+1].isdigit():
                 cleaned.append(char)
-        # Otherwise skip punctuation
-    
     text = ''.join(cleaned)
-    
-    # Split into tokens and remove stopwords
     tokens = text.split()
     tokens = [t for t in tokens if t not in STOPWORDS]
     
@@ -94,21 +74,12 @@ def _extract_numbers(text: str) -> Set[str]:
     
     text = text.lower()
     numbers = set()
-    
-    # Pattern for Arabic numbers (integers and decimals)
-    # Matches: 1990, 2.5, 0.123, etc.
     arabic_pattern = r'\b\d+(?:\.\d+)?\b'
     for match in re.finditer(arabic_pattern, text):
         numbers.add(match.group())
-    
-    # Pattern for Roman numerals
-    # Valid Roman numerals: I, II, III, IV, V, VI, VII, VIII, IX, X, XI, XII, etc.
-    # Pattern: must be word boundary, composed only of valid Roman numeral chars
     roman_pattern = r'\b[ivxlcdm]+\b'
-    
     for match in re.finditer(roman_pattern, text):
         candidate = match.group()
-        # Validate it's actually a Roman numeral (not just random letters)
         if _is_valid_roman(candidate):
             numbers.add(candidate)
     
@@ -122,37 +93,22 @@ def _is_valid_roman(s: str) -> bool:
     """
     if not s:
         return False
-    
-    # Valid Roman numeral characters only
     valid_chars = set('ivxlcdm')
     if not set(s).issubset(valid_chars):
         return False
-    
-    # Check common patterns and reject common English words that match the pattern
-    # Common false positives to exclude
     false_positives = {
         'i', 'ii', 'iii', 'iv', 'v', 'vi', 'vii', 'viii', 'ix', 'x',
         'xi', 'xii', 'xiii', 'xiv', 'xv', 'xvi', 'xvii', 'xviii', 'xix', 'xx',
         'xxi', 'xxii', 'xxiii', 'xxiv', 'xxv', 'xxx', 'xl', 'l', 'lx', 'lxx',
         'lxxx', 'xc', 'c', 'cc', 'ccc', 'cd', 'd', 'dc', 'dcc', 'dccc', 'cm', 'm',
-        'mm', 'mmm', 'mmmm'
+        'mm', 'mmm',         'mmmm'
     }
-    
-    # Only accept if it's in our known Roman numerals set (more precise)
-    # Or if it matches strict Roman numeral patterns
     if s in false_positives:
         return True
-    
-    # Additional pattern check: valid Roman numeral structure
-    # A simple heuristic: check for typical patterns
     roman_regex = r'^m{0,4}(cm|cd|d?c{0,3})(xc|xl|l?x{0,3})(ix|iv|v?i{0,3})$'
     if re.match(roman_regex, s):
         return True
-    
-    # If length is 1 and it's a valid single Roman char, accept it
     if len(s) == 1 and s in 'ivxlcdm':
-        # But filter out 'i' as it's too common as a word
-        # Actually, 'i' (uppercase I) is Roman numeral 1, keep it
         return True
     
     return False
@@ -226,38 +182,20 @@ def soft_match(pred: str, gold: str) -> float:
         return 1.0
     if not pred or not gold:
         return 0.0
-    
-    # Step 1: Extract numbers
     pred_numbers = _extract_numbers(pred)
     gold_numbers = _extract_numbers(gold)
-    
-    # Step 2: Strict number identity check
     if pred_numbers != gold_numbers:
         return 0.0
-    
-    # Step 3: Normalize text
     pred_norm = _normalize_for_soft_match(pred)
     gold_norm = _normalize_for_soft_match(gold)
-    
-    # Handle empty strings after normalization
     if not pred_norm and not gold_norm:
         return 1.0
     if not pred_norm or not gold_norm:
         return 0.0
-    
-    # Split into token sets for comparison
     pred_tokens = set(pred_norm.split())
     gold_tokens = set(gold_norm.split())
-    
-    # Step 4: Bidirectional token-level inclusion check
-    # Direction A: Are all gold tokens contained in pred tokens? (verbose prediction)
     if gold_tokens.issubset(pred_tokens):
         return 1.0
-    
-    # Direction B: Are all pred tokens contained in gold tokens? (verbose gold)
-    # Only apply if:
-    # - pred_norm is longer than 3 chars (avoid short meaningless words), OR
-    # - there are numbers (numbers validate entity identity, allow short answers like "2")
     has_numbers = len(pred_numbers) > 0 or len(gold_numbers) > 0
     if (len(pred_norm) > 3 or has_numbers) and pred_tokens.issubset(gold_tokens):
         return 1.0

@@ -4,8 +4,10 @@ import re
 from typing import Optional, Callable
 
 
-# Regex to intercept any structural tag.
-# Useful for determining where a section ends if the model forgets to close it.
+# ==============================================================================
+# PARSING UTILITIES
+# ==============================================================================
+
 _TAG_RE = re.compile(r"</?(reasoning|timeline|reflection|adjustments|answer)\b[^>]*>", re.IGNORECASE)
 
 
@@ -23,14 +25,10 @@ def _clean_answer(s: str) -> str:
     Removes leading bullet points, wrapping quotes, and normalizes internal whitespace.
     """
     s = s.strip()
-    # Remove common leading bullets
     s = re.sub(r"^\s*[-•*]+\s*", "", s)
-    
-    # Remove wrapping quotes if present
     if (len(s) >= 2) and ((s[0] == s[-1]) and s[0] in ("'", '"')):
         s = s[1:-1].strip()
 
-    # Collapse internal whitespace
     s = re.sub(r"\s+", " ", s).strip()
 
     low = s.lower()
@@ -67,43 +65,28 @@ def extract_section(text: str, tag_name: str) -> str:
     close_tag = f"</{tag_name}>"
     lower = text.lower()
 
-    # --- CASE 1: Perfect Pair (<tag>...</tag>) ---
     strict = _extract_between_ci(text, open_tag, close_tag)
     if strict is not None:
         return _clean_text_neutral(strict)
 
-    # --- CASE 2: Missing closing tag (<tag>...) ---
-    # Take from the opening tag until the NEXT structural tag.
     start_idx = lower.find(open_tag.lower())
     if start_idx != -1:
         content_start = start_idx + len(open_tag)
         chunk = text[content_start:]
-        
-        # Search for the start of the next tag (e.g., <timeline>, <answer>) to stop
         m = _TAG_RE.search(chunk)
         if m:
             chunk = chunk[:m.start()]
             
         return _clean_text_neutral(chunk)
 
-    # --- CASE 3: Missing opening tag (...</tag>) ---
-    # Use regex to find actual XML tags, not just any '>' character.
-    # This avoids false matches with mathematical symbols (e.g., "5 > 3") or arrows ("->").
     end_idx = lower.rfind(close_tag.lower())
     if end_idx != -1:
         before = text[:end_idx]
-        
-        # Find all valid XML structure tags in 'before' using the regex
-        # Example: "... </reasoning> CONTENT </timeline>"
-        # We want to find the last tag (</reasoning>) and start content after it.
         matches = list(_TAG_RE.finditer(before))
-        
         if matches:
-            # Content starts after the last valid tag found
             last_match = matches[-1]
             chunk = before[last_match.end():]
         else:
-            # If no valid tags found, content starts at the beginning
             chunk = before
 
         return _clean_text_neutral(chunk)
@@ -117,35 +100,28 @@ def extract_answer(text: str) -> str:
     Maintains heuristic logic (last lines/cap at 500 chars) 
     because answers are often unstructured or short.
     """
-    # 1. Strict extraction
     strict = _extract_between_ci(text, "<answer>", "</answer>")
     if strict:
         return _clean_answer(strict)
 
     lower = text.lower()
 
-    # 2. Open (<answer>...)
     a = lower.find("<answer>")
     if a != -1:
         chunk = text[a + len("<answer>") :]
         m = _TAG_RE.search(chunk)
         if m:
             chunk = chunk[: m.start()]
-        
-        # Cap is useful here: avoid dragging long comments or hallucinations
         chunk = chunk.strip()[:500] 
         lines = [ln.strip() for ln in chunk.splitlines() if ln.strip()]
         return _clean_answer(lines[0] if lines else chunk)
 
-    # 3. Close (...</answer>)
     b = lower.rfind("</answer>")
     if b != -1:
         before = text[:b].strip()
-        # Take the last non-empty line (standard heuristic for CoT)
         lines = [ln.strip() for ln in before.splitlines() if ln.strip()]
         if not lines:
             return ""
-        # Limit length for safety
         return _clean_answer(lines[-1][:500])
 
     return ""

@@ -1,37 +1,15 @@
 #!/usr/bin/env python3
 """
-CLI Script for TISER Single Model Fine-tuning
+TISER single-model fine-tuning with LoRA.
 
-This script provides a command-line interface for fine-tuning language models
-on the TISER dataset using LoRA (Low-Rank Adaptation) for efficient training.
-
-Features:
-- Automatic device detection (CUDA, MPS, CPU)
-- LoRA-based efficient fine-tuning
-- Configurable training hyperparameters
-- Support for custom datasets and model checkpoints
-- Comprehensive logging and checkpoint saving
-- Memory-efficient gradient checkpointing
+Fine-tunes a causal LM on the TISER dataset using LoRA for efficient training.
+Supports automatic device selection (CUDA, MPS, CPU), configurable hyperparameters,
+and completion-only training so the model learns only the assistant response.
 
 Examples:
-    # Basic training with default settings
-    python scripts/run_single_training.py --data src/data/processed/TISER_train_10pct.json --output experiments/qwen_finetuned
-    
-    # Custom model and training parameters
-    python scripts/run_single_training.py --data src/data/processed/TISER_train_20pct.json \\
-        --output experiments/qwen_custom \\
-        --model Qwen/Qwen2.5-7B-Instruct \\
-        --epochs 5 \\
-        --batch-size 2 \\
-        --learning-rate 3e-4
-    
-    # Advanced LoRA configuration
-    python scripts/run_single_training.py \\
-        --data src/data/processed/TISER_train_10pct.json \\
-        --output experiments/qwen_lora \\
-        --lora-r 32 \\
-        --lora-alpha 64 \\
-        --max-seq-length 4096
+    python scripts/run_finetuning.py --output models/qwen_finetuned
+    python scripts/run_finetuning.py --data data/processed/TISER_train_demo_10pct.json --epochs 5
+    python scripts/run_finetuning.py --lora-r 32 --lora-alpha 64 --max-seq-length 4096
 """
 
 import argparse
@@ -50,13 +28,17 @@ from transformers import (
 from datasets import Dataset as HFDataset
 from peft import LoraConfig
 from trl import SFTTrainer, DataCollatorForCompletionOnlyLM, SFTConfig
-# Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from src.config import PROCESSED_DIR
 from src.data.tiser_dataset import TiserDataset, load_tiser_file
 
 logger = logging.getLogger(__name__)
 
+
+# ==============================================================================
+# UTILITIES
+# ==============================================================================
 
 def setup_logging(verbose: bool = True):
     """Configure logging for the script."""
@@ -89,6 +71,10 @@ def detect_device() -> str:
     return device
 
 
+# ==============================================================================
+# CONFIG AND SETUP
+# ==============================================================================
+
 def setup_tokenizer(model_id: str):
     """
     Load and configure tokenizer for the model.
@@ -101,8 +87,7 @@ def setup_tokenizer(model_id: str):
     """
     logger.info(f"Loading tokenizer: {model_id}")
     tokenizer = AutoTokenizer.from_pretrained(model_id)
-    
-    # Ensure pad token is set
+
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
         logger.info("Set pad_token to eos_token")
@@ -149,28 +134,10 @@ def load_dataset(data_path: Path, tokenizer, max_examples: Optional[int] = None)
 
 def setup_data_collator(tokenizer, response_template: str = "<|im_start|>assistant\n"):
     """
-    Create data collator for completion-only training. The collator is responsible for:
-    Padding sequences: Different text sequences might have different lengths. The data colltor pads these sequences to the same length so that they can be processed in parallel in a batch
-    Creating Attention Masks: When padding sequences, the data collator also creates attention masks to inform the model which tokens are real and which are just padding.
-    Handling Special Tokens: Some models require special tokens (like start and end tokens) in the input. The data collator can add these as needed.
-    
-    Args:
-        tokenizer: Tokenizer to use
-        response_template: Template marking the start of assistant response
-        
-    Returns:
-        DataCollatorForCompletionOnlyLM
+    Create data collator for completion-only training.
+    Labels are applied only on the assistant response; prompt tokens are masked so the model
+    does not learn to reproduce the question.
     """
-    #We use this collator because forces the model to try to learn only the response, not the question. The colletor
-    #is indeed responsible to associate -inf labels to the corresponding pad token inserted, but DataCollatorForCompletionOnlyLM
-    #is used to force the model to learn only how to minimize the loss on the response, avoiding useless mnemonic work
-    #to learn the question. For example:
-    #A classic collator would do the following:
-    #input_ids: [User] [Prompt] [Assist] [Resp] [PAD]
-    #labels: [User] [Prompt] [Assist] [Resp] [-100]
-    #DataCollatorForCompletionOnlyLM would do this instead:
-    #input_ids: [User] [Prompt] [Assist] [Resp] [PAD]
-    #labels: [-100] [-100] [-100] [Resp] [-100]
     collator = DataCollatorForCompletionOnlyLM(
         response_template=response_template,
         tokenizer=tokenizer
@@ -194,14 +161,12 @@ def load_model(model_id: str, device: str, use_flash_attention: bool = False):
         Loaded model
     """
     logger.info(f"Loading model: {model_id} (this may take a while...)")
-    
-    # Configure model loading parameters
+
     model_kwargs = {
         "device_map": "auto",
         "torch_dtype": torch.bfloat16,  # bfloat16 works well on M1/M2/M3 and modern GPUs
     }
-    
-    # Flash Attention 2 only works on CUDA
+
     if device == "cuda" and use_flash_attention:
         try:
             model_kwargs["attn_implementation"] = "flash_attention_2"
@@ -213,8 +178,7 @@ def load_model(model_id: str, device: str, use_flash_attention: bool = False):
         model_id,
         **model_kwargs
     )
-    
-    # Enable gradient checkpointing to save memory (essential for 7B+ models)
+
     model.gradient_checkpointing_enable()
     logger.info("Gradient checkpointing enabled")
     model.config.use_cache = False
@@ -243,7 +207,6 @@ def create_lora_config(
         lora_dropout=lora_dropout,
         bias="none",
         task_type="CAUSAL_LM",
-        # Target modules for Qwen architecture (attention + feed forward)
         target_modules=[
             "q_proj", "k_proj", "v_proj", "o_proj",
             "gate_proj", "up_proj", "down_proj"
@@ -289,7 +252,6 @@ def create_training_args(
     Returns:
         TrainingArguments object
     """
-    # Create output directory
     output_dir.mkdir(parents=True, exist_ok=True)
     
     training_args = SFTConfig(
@@ -323,6 +285,10 @@ def create_training_args(
     
     return training_args
 
+
+# ==============================================================================
+# TRAINING
+# ==============================================================================
 
 def train_model(
     data_path: Path,
@@ -362,40 +328,26 @@ def train_model(
     logger.info("="*80)
     logger.info("TISER SINGLE MODEL FINE-TUNING PIPELINE")
     logger.info("="*80)
-    
-    # Disable tokenizer parallelism to avoid deadlocks
+
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
-    
-    # Detect device
+
     device = detect_device()
-    
-    # Load tokenizer
     tokenizer = setup_tokenizer(model_id)
-    
-    # Load dataset
     train_dataset = load_dataset(data_path, tokenizer, max_examples)
     hf_train_dataset = HFDataset.from_list([item for item in train_dataset])
-    
-    # Setup data collator
     data_collator = setup_data_collator(tokenizer, response_template)
-    
-    # Load model
     model = load_model(model_id, device, use_flash_attention)
-    
-    # Create LoRA config
     peft_config = create_lora_config(lora_r, lora_alpha, lora_dropout)
-    
-    # Create training arguments
     training_args = create_training_args(
         output_dir=output_dir,
         num_epochs=num_epochs,
         batch_size=batch_size,
         gradient_accumulation_steps=gradient_accumulation_steps,
         learning_rate=learning_rate,
-        device=device
+        device=device,
+        max_seq_length=max_seq_length
     )
-    
-    # Initialize trainer
+
     logger.info("Initializing SFTTrainer...")
     trainer = SFTTrainer(
         model=model,
@@ -406,15 +358,13 @@ def train_model(
         peft_config=peft_config,
         packing=False
     )
-    
-    # Start training
+
     logger.info("\n" + "="*80)
     logger.info("STARTING TRAINING")
     logger.info("="*80 + "\n")
     
     trainer.train()
-    
-    # Save model
+
     logger.info("\nSaving model...")
     trainer.save_model(str(output_dir))
     tokenizer.save_pretrained(str(output_dir))
@@ -424,38 +374,28 @@ def train_model(
     logger.info("="*80)
 
 
+# ==============================================================================
+# MAIN
+# ==============================================================================
+
 def main():
+    default_data = PROCESSED_DIR / "TISER_train_demo_10pct.json"
     parser = argparse.ArgumentParser(
         description="Fine-tune language models on TISER dataset with LoRA",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Basic training with default settings
-  %(prog)s --data src/data/processed/TISER_train_10pct.json \\
-           --output experiments/qwen_finetuned
-
-  # Custom training parameters
-  %(prog)s --data src/data/processed/TISER_train_20pct.json \\
-           --output experiments/qwen_custom \\
-           --epochs 5 \\
-           --batch-size 2 \\
-           --learning-rate 3e-4
-
-  # Advanced LoRA configuration
-  %(prog)s --data src/data/processed/TISER_train_10pct.json \\
-           --output experiments/qwen_lora \\
-           --lora-r 32 \\
-           --lora-alpha 64 \\
-           --max-seq-length 4096
+  %(prog)s --output experiments/qwen_finetuned
+  %(prog)s --data data/processed/TISER_train_demo_10pct.json --epochs 5
+  %(prog)s --lora-r 32 --lora-alpha 64 --max-seq-length 4096
         """
     )
-    
-    # Required arguments
+
     parser.add_argument(
         '--data', '-d',
         type=Path,
-        required=True,
-        help='Path to training data (JSONL format)'
+        default=default_data,
+        help=f'Path to training data (default: {default_data})'
     )
     parser.add_argument(
         '--output', '-o',
@@ -463,8 +403,6 @@ Examples:
         required=True,
         help='Output directory for saving model checkpoints'
     )
-    
-    # Model configuration
     parser.add_argument(
         '--model', '-m',
         type=str,
@@ -477,8 +415,6 @@ Examples:
         default='<|im_start|>assistant\n',
         help='Response template for completion-only training (default: <|im_start|>assistant\\n)'
     )
-    
-    # Training hyperparameters
     parser.add_argument(
         '--epochs', '-e',
         type=int,
@@ -509,8 +445,6 @@ Examples:
         default=2048,
         help='Maximum sequence length (default: 2048)'
     )
-    
-    # LoRA parameters
     parser.add_argument(
         '--lora-r',
         type=int,
@@ -529,8 +463,6 @@ Examples:
         default=0.05,
         help='LoRA dropout (default: 0.05)'
     )
-    
-    # Advanced options
     parser.add_argument(
         '--max-examples',
         type=int,
@@ -549,11 +481,9 @@ Examples:
     )
     
     args = parser.parse_args()
-    
-    # Setup logging
+
     setup_logging(verbose=not args.quiet)
-    
-    # Run training
+
     try:
         train_model(
             data_path=args.data,
